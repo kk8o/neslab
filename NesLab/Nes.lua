@@ -341,7 +341,12 @@ function NesLab.NewMachine(rom)
 
 	function m.Frame()
 		ppu.line = 241
-		if ppu.VblankStart() then debt = debt - nmi() end
+		if ppu.VblankStart() then
+			-- 真机先把手上这条指令做完再进 NMI：主循环里「读 $2002 等垂直空白」的那条指令正好读到标志，
+			-- NMI 处理程序再把它清掉。立刻进 NMI 的话标志先被清掉，这类游戏会永远等下去
+			debt = debt - run(1)
+			debt = debt - nmi()
+		end
 		for l = 241, 260 do
 			ppu.line = l
 			Line()
