@@ -368,6 +368,7 @@ local function Build()
 		end
 	end
 	local w = CreateFrame("Frame", "NesLabPlayer", UIParent)
+	_G.NesLabPlayer = w                                  -- 同名框体已存在时 CreateFrame 不会改全局名（热加载）
 	w:SetFrameStrata("DIALOG")
 	w:SetToplevel(true)
 	w:SetMovable(true)
@@ -711,6 +712,7 @@ function NesLab.StartGame(cart, rom, m, scr, scale)
 	end)
 	NesLab.machine = m
 	if not InCombatLockdown() then P.win:EnableKeyboard(true) end
+	NesLab.CapturePad(true)                         -- 直接开游戏（/neslab play、读档切换）也接管手柄
 end
 
 -- 存档内存有变化就存（每秒查一次；退出、重置前也存）
@@ -908,10 +910,27 @@ function NesLab.ShowCopy(url)
 end
 
 -- 手柄：窗口开着时接管（不传给角色移动、动作条）；战斗中不改
+-- 窗口接管手柄挡得住按键，挡不住左摇杆走路：接管期间临时关掉游戏的「摇杆移动」（GamePadAnalogMovement），
+-- 放开时还原。原值先记进 NesLabDB.padRestore，重载 / 掉线没来得及还原的，下次登录时还原
+local function StickMovement(off)
+	local db = DB()
+	if off then
+		if db.padRestore == nil then
+			db.padRestore = GetCVar("GamePadAnalogMovement") or "1"
+			SetCVar("GamePadAnalogMovement", "0")
+		end
+	elseif db.padRestore ~= nil then
+		SetCVar("GamePadAnalogMovement", db.padRestore)
+		db.padRestore = nil
+	end
+end
+NesLab.StickMovement = StickMovement
+
 function NesLab.CapturePad(on)
 	if not P.win or InCombatLockdown() then return end
 	P.win:EnableGamePadButton(on)
 	P.win:EnableGamePadStick(on)
+	StickMovement(on)
 end
 
 local function MoveSelection(dx, dy)
@@ -980,14 +999,18 @@ end
 local events = CreateFrame("Frame")
 events:RegisterEvent("PLAYER_REGEN_DISABLED")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")
+events:RegisterEvent("PLAYER_LOGIN")
 events:SetScript("OnEvent", function(_, event)
+	if event == "PLAYER_LOGIN" then                    -- 上次没来得及还原的「摇杆移动」设置
+		if NesLabDB and NesLabDB.padRestore ~= nil then StickMovement(false) end
+		return
+	end
 	if not P.win then return end
 	if event == "PLAYER_REGEN_DISABLED" then
 		if P.m then NesLab.SetPaused(true) end
 		P.win:SetPropagateKeyboardInput(true)
 		P.win:EnableKeyboard(false)
-		P.win:EnableGamePadButton(false)
-		P.win:EnableGamePadStick(false)
+		NesLab.CapturePad(false)                          -- 这时还没进锁定：手柄、摇杆移动都还给游戏
 	elseif P.win:IsShown() then
 		if P.m or P.page == "library" or P.page == "binds" then P.win:EnableKeyboard(true) end
 		NesLab.CapturePad(true)
