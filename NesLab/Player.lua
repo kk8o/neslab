@@ -13,6 +13,7 @@ local FONT = STANDARD_TEXT_FONT
 local GOLD = { 0.79, 0.67, 0.44 }
 local FRAME = 1 / 60.0988                      -- NTSC 帧率
 local DRAW_FPS = 30                            -- 画面最多每秒画几次（模拟照样每秒 60 帧，游戏速度不变）
+local BUDGET_MS = 8                             -- 魔兽每一帧里模拟器最多用这么多毫秒：先让魔兽流畅，忙不过来就让游戏放慢
 local TITLE_H, BAR_H, PAD = 28, 34, 10
 local GAME_MIN_W, GAME_MIN_H = 600, 420
 local COLS, ROWS, GAP = 5, 3, 8                 -- 游戏库：封面卡片 5 列 3 行，滚轮翻行
@@ -676,15 +677,21 @@ function NesLab.StartGame(cart, rom, m, scr, scale)
 	g.mute:SetLabel(db.muted and "声音：关" or "声音：开")
 	NesLab.SetPaused(InCombatLockdown())            -- 加载途中进了战斗：先暂停（这时键盘、手柄都没接管）
 	local acc, frames, cpuMs, drawMs, shown, last = 0, 0, 0, 0, 0, GetTime()
-	local drawAcc = 0
+	local drawAcc, lagged = 0, 0                    -- lagged：让位时丢掉的帧数（算速度百分比）
 	g:SetScript("OnUpdate", function(_, elapsed)
 		if P.paused then return end
 		if ((P.m.pad.held or 0) ~= 0 or (P.m.pad2.held or 0) ~= 0) and GetCurrentKeyBoardFocus() then   -- 输入框抢了键盘：全放开
 			NesLab.ReleaseAll()
 		end
 		acc = math.min(acc + elapsed, 0.1)
-		local ran = 0
-		while acc >= FRAME and ran < 3 do         -- 跟不上就少画几帧，模拟照常跑
+		local ran, start = 0, debugprofilestop()
+		-- 让位给魔兽：每帧至少模拟一帧（游戏还在动），之后只在预算没用完时补帧；补不上就丢掉欠的时间、游戏放慢
+		while acc >= FRAME do
+			if ran > 0 and debugprofilestop() - start >= BUDGET_MS then
+				lagged = lagged + math.floor(acc / FRAME)
+				acc = 0
+				break
+			end
 			local t = debugprofilestop()
 			if P.turbo ~= 0 or P.turbo2 ~= 0 then
 				P.turboTick = (P.turboTick or 0) + 1
@@ -698,7 +705,10 @@ function NesLab.StartGame(cart, rom, m, scr, scale)
 			acc, ran, frames = acc - FRAME, ran + 1, frames + 1
 		end
 		drawAcc = drawAcc + elapsed
-		if ran > 0 and drawAcc >= 1 / DRAW_FPS - 0.002 then
+		-- 画面也让路：预算用完的这一帧不画，下一帧有空再画
+		-- （一帧就超预算的重游戏：最多隔两次不画，免得画面停住）
+		if ran > 0 and drawAcc >= 1 / DRAW_FPS - 0.002
+			and (debugprofilestop() - start < BUDGET_MS or drawAcc >= 2 / DRAW_FPS) then
 			drawAcc = 0
 			local t = debugprofilestop()
 			P.scr.Render(P.m.ppu)
@@ -707,11 +717,16 @@ function NesLab.StartGame(cart, rom, m, scr, scale)
 		end
 		if GetTime() - last >= 1 then
 			NesLab.SaveBattery()
-			g.stats:SetFormattedText("%d 帧 · %.1f ms", shown, (frames > 0 and cpuMs / frames or 0)
-				+ (shown > 0 and drawMs / shown or 0))
+			local speed = frames + lagged > 0 and frames / (frames + lagged) or 1
+			local ms = (frames > 0 and cpuMs / frames or 0) + (shown > 0 and drawMs / shown or 0)
+			if speed < 0.97 then
+				g.stats:SetFormattedText("速度 %d%% · %d 帧 · %.1f ms", math.floor(speed * 100 + 0.5), shown, ms)
+			else
+				g.stats:SetFormattedText("%d 帧 · %.1f ms", shown, ms)
+			end
 			NesLab.perf = { frames = frames, shown = shown, cpuMs = frames > 0 and cpuMs / frames or 0,
 				drawMs = shown > 0 and drawMs / shown or 0 }
-			frames, shown, cpuMs, drawMs, last = 0, 0, 0, 0, GetTime()
+			frames, shown, cpuMs, drawMs, last, lagged = 0, 0, 0, 0, GetTime(), 0
 		end
 	end)
 	NesLab.machine = m
