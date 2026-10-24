@@ -470,7 +470,6 @@ local function Build()
 	w:SetScript("OnKeyDown", function(self, k) NesLab.OnKey(self, k, true) end)
 	w:SetScript("OnKeyUp", function(self, k) NesLab.OnKey(self, k, false) end)
 	w:SetScript("OnGamePadButtonDown", function(_, b) NesLab.OnPad(b, true) end)
-	w:SetScript("OnUpdate", function() NesLab.SyncHeld() end)   -- 每帧核对按住的键（松开没收到的补上）
 	w:SetScript("OnGamePadButtonUp", function(_, b) NesLab.OnPad(b, false) end)
 	w:SetScript("OnGamePadStick", function(_, stick, x, y) NesLab.OnPadStick(stick, x, y) end)
 end
@@ -931,10 +930,8 @@ end
 
 local NAV = { UP = { 0, -1 }, DOWN = { 0, 1 }, LEFT = { -1, 0 }, RIGHT = { 1, 0 } }
 
-local padDown = {}
 function NesLab.OnPad(b, down)
 	if InCombatLockdown() then return end
-	padDown[b] = down or nil
 	if P.page == "binds" then return NesLab.BindsPad(b, down) end
 	local act, pl = NesLab.PadAction(b)
 	if P.page == "library" then
@@ -952,25 +949,8 @@ function NesLab.OnPad(b, down)
 	GameAction(act, down, pl)
 end
 
--- 核对按住的键：切出窗口、换游戏、聊天框抢走键盘时，松开那一下可能没送到这个窗口，
--- 模拟器就以为一直按着。每帧问一次游戏「这个键现在真的按着吗」，没按着就补一次松开
-function NesLab.SyncHeld()
-	if InCombatLockdown() then return end
-	for k in pairs(keysDown) do
-		if not IsKeyDown(k) then
-			keysDown[k] = nil
-			PageKey(P.win, k, false)
-		end
-	end
-	if next(padDown) then
-		local id = C_GamePad.GetActiveDeviceID()
-		local st = id and C_GamePad.GetDeviceMappedState(id)
-		for b in pairs(padDown) do
-			local i = C_GamePad.ButtonBindingToIndex(b)
-			if not (st and i and st.buttons[i + 1]) then NesLab.OnPad(b, false) end
-		end
-	end
-end
+-- 注意：不能用 IsKeyDown / GetDeviceMappedState 核对按住的键——被这个窗口拦下的键盘键、窗口接管的手柄键，
+-- 游戏自己的按键状态里都没有（实测按住时一直是「没按着」）
 
 -- 左摇杆当十字键（过半才算按下）；只改摇杆自己按下的方向，不碰十字键 / 键盘按住的
 local STICK_DIRS = BUTTON.UP + BUTTON.DOWN + BUTTON.LEFT + BUTTON.RIGHT
