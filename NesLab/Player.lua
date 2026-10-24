@@ -705,10 +705,9 @@ function NesLab.StartGame(cart, rom, m, scr, scale)
 			acc, ran, frames = acc - FRAME, ran + 1, frames + 1
 		end
 		drawAcc = drawAcc + elapsed
-		-- 画面也让路：预算用完的这一帧不画，下一帧有空再画
-		-- （一帧就超预算的重游戏：最多隔两次不画，免得画面停住）
+		-- 画面照常每秒画 DRAW_FPS 次（画一次通常不到 1 毫秒）；只有这一帧已经用掉两倍预算时才推到下一帧，最多推一次
 		if ran > 0 and drawAcc >= 1 / DRAW_FPS - 0.002
-			and (debugprofilestop() - start < BUDGET_MS or drawAcc >= 2 / DRAW_FPS) then
+			and (debugprofilestop() - start < BUDGET_MS * 2 or drawAcc >= 2 / DRAW_FPS) then
 			drawAcc = 0
 			local t = debugprofilestop()
 			P.scr.Render(P.m.ppu)
