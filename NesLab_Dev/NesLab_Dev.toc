@@ -1,0 +1,11 @@
+## Interface: 16001
+## Title: NesLab Dev
+## Title-zhCN: NesLab 开发自检
+## Notes: NesLab developer tools: nestest CPU test (kevtris) and benchmarks. Not needed to play.
+## Notes-zhCN: NesLab 的开发自检：nestest CPU 测试（kevtris）和测速。玩游戏不需要。
+## LoadOnDemand: 1
+## Dependencies: NesLab
+
+NestestData.lua
+Nestest.lua
+Bench.lua

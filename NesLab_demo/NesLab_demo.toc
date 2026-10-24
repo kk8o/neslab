@@ -1,0 +1,13 @@
+## Interface: 16001
+## Title: NesLab · NesLab 自检
+## Title-zhCN: NES 卡带 · NesLab 自检
+## Notes-zhCN: NesLab 的游戏卡带（NROM，24 KB），在 /neslab 游戏库里打开
+## LoadOnDemand: 1
+## Dependencies: NesLab
+## X-NesLab-Cart: 1
+## X-NesLab-Id: demo
+## X-NesLab-Name: NesLab 自检
+## X-NesLab-Mapper: NROM
+## X-NesLab-Size: 24
+
+cart.lua

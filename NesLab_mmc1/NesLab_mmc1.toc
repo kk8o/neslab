@@ -1,0 +1,14 @@
+## Interface: 16001
+## Title: NesLab · MMC1 自检
+## Title-zhCN: NES 卡带 · MMC1 自检
+## Notes-zhCN: NesLab 的游戏卡带（MMC1，80 KB），在 /neslab 游戏库里打开
+## LoadOnDemand: 1
+## Dependencies: NesLab
+## X-NesLab-Cart: 1
+## X-NesLab-Id: mmc1
+## X-NesLab-Name: MMC1 自检
+## X-NesLab-Mapper: MMC1
+## X-NesLab-Size: 80
+## X-NesLab-Battery: 1
+
+cart.lua

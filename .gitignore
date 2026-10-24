@@ -1,0 +1,11 @@
+# 游戏 ROM、转换出来的游戏卡带、截图集都不进仓库（自检卡带 NesLab_demo / NesLab_mmc1 除外）
+*.nes
+*.fds
+*.zip
+NesLab_*/
+!NesLab_Dev/
+!NesLab_demo/
+!NesLab_mmc1/
+covers.json
+__pycache__/
+*.pyc
