@@ -53,7 +53,7 @@ function NesLab.NewSound()
 			local w = NesLabDB.dmcWanted[s.cartId] or {}
 			NesLabDB.dmcWanted[s.cartId] = w
 			w[key] = true
-			ok, handle = PlaySoundFile(DIR .. "n0" .. Clamp(15 - rate, 0, 15) .. "_3.ogg", "Master")   -- 先用噪声顶着
+			ok, handle = PlaySoundFile(DIR .. "n0" .. Clamp(15 - rate, 0, 15) .. "_1.ogg", "Master")   -- 先用小声的噪声顶着
 		end
 		if ok then s.handles[5] = handle end
 	end

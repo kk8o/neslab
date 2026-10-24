@@ -18,10 +18,16 @@ def wanted():
     out = {}
     for sv in glob.glob(os.path.join(GAME, "WTF", "Account", "*", "SavedVariables", "NesLab.lua")):
         text = open(sv, encoding="utf-8", errors="replace").read()
-        m = re.search(r'\["dmcWanted"\] = \{(.*?)\n\t\},', text, re.S)
-        if not m:
+        i = text.find('["dmcWanted"] = {')
+        if i < 0:
             continue
-        for cart, body in re.findall(r'\["([^"]+)"\] = \{(.*?)\}', m.group(1), re.S):
+        i, depth, start = text.index("{", i), 0, text.index("{", i)
+        while True:                                # 按括号配对找块尾（存档有时带缩进、有时不带）
+            depth += {"{": 1, "}": -1}.get(text[i], 0)
+            if depth == 0:
+                break
+            i += 1
+        for cart, body in re.findall(r'\["([^"]+)"\] = \{(.*?)\}', text[start + 1:i], re.S):
             out.setdefault(cart, set()).update(re.findall(r'\["([0-9a-f]+_\d+_\d+)"\]', body))
     return out
 
