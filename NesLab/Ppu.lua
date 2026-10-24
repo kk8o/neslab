@@ -118,9 +118,11 @@ function NesLab.NewPpu(rom, machine)
 		index = rom.tileIndex
 		if not index then                               -- 同一张卡带只建一次（重置、读档不用再建）
 			index = {}
-			local hex = rom.tiles or ""
-			for s = 0, #hex / 32 - 1 do
-				local key = hex:sub(s * 32 + 1, s * 32 + 32):gsub("%x%x", function(h) return string.char(tonumber(h, 16)) end)
+			local HEX = {}                               -- 整串一次 gsub 查表换成字节，比逐块回调快约 5 倍（满贴图 2 万多块时要紧）
+			for i = 0, 255 do HEX[string.format("%02X", i)] = string.char(i) end
+			local raw = (rom.tiles or ""):gsub("%x%x", HEX)
+			for s = 0, #raw / 16 - 1 do
+				local key = raw:sub(s * 16 + 1, s * 16 + 16)
 				index[key] = index[key] or s
 			end
 			rom.tileIndex = index

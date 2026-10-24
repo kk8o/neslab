@@ -4,7 +4,8 @@
 #   cart.lua         程序（PRG）、图案（CHR）十六进制，镜像方式、mapper，每个图块用到哪几种颜色
 #   tiles.blp        图块贴图：每个图块拆成颜色 1 / 2 / 3 三张白色蒙版（游戏里分别着色），一格 8×8，一行 32 格；
 #                    BLP（DXT1，只有白和透明，原样无损，是 32 位 TGA 的八分之一；tools/blp.py、atlas.py）
-# 图案在卡带内存里（CHR RAM）的卡带：先用 chrram.py 把游戏跑一阵收集它写过的图块，烘成贴图，cart.lua 记 chrRam + tiles；
+# 图案在卡带内存里（CHR RAM）的卡带：先用 chrram.py 把游戏跑一阵收集它写过的图块，再从程序里原样存着的图案块补齐
+# （chrram.from_prg，没跑到的关卡也收得到），烘成贴图，cart.lua 记 chrRam + tiles；
 # 重转同一个编号会保留以前收到的图块，再加上游戏里记下的没烘到的图块（NesLabDB.chrWanted）。
 # 声音用 NesLab\sound 里的共用音色库（所有游戏通用）；还没生成就顺手生成（要 ffmpeg）。
 # 支持 mapper 0 NROM、1 MMC1、2 UxROM、3 CNROM、4 MMC3、7 AxROM、34 BNROM、66 GxROM、140 Jaleco。带电池的卡带存档进 NesLabDB。
@@ -119,13 +120,16 @@ if chr_ram:
     import chrlearn
     wanted = [bytes.fromhex(h) for h in sorted(chrlearn.wanted().get(rid, ()))]
     new = [k for k, _ in sorted(got, key=lambda kv: -kv[1])] + wanted   # 超出贴图上限时先留见得多的
+    # 再从程序里原样存着的图案块补：跑游戏没走到的关卡也收得到（排在最后，贴图满了先舍这些）
+    from_prg = chrram.from_prg(prg, have | set(new))
+    new += from_prg
     added = 0
     for k in new:
         if k not in have and len(known) < atlas.MAX_TILES:
             have.add(k)
             known.append(k)
             added += 1
-    print("图块 %d 种（这次新加 %d，游戏里记下的 %d）" % (len(known), added, len(wanted)))
+    print("图块 %d 种（这次新加 %d，游戏里记下的 %d，程序里整块收的 %d）" % (len(known), added, len(wanted), len(from_prg)))
     chr_ = b""
     tiles_hex = b"".join(known).hex().upper()
     W, H, SLOTS_PER_ROW, used = atlas.write(out, b"".join(known))

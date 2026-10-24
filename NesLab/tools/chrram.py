@@ -81,3 +81,49 @@ def collect(rom_fields, runs=4, frames=20000):
                 order[k] = len(order)
     counts = dict(seen.items())
     return sorted(((k, counts[k]) for k in order), key=lambda kv: order[kv[0]])
+
+
+
+def _code_score(blk):
+    """一块里像 6502 程序的地方有几处：JSR / JMP 到 $8000 以上、读写 PPU / APU / 内存 $0300-$07FF 的绝对寻址"""
+    n = 0
+    for i in range(len(blk) - 2):
+        o, h = blk[i], blk[i + 2]
+        if o in (0x20, 0x4C) and h >= 0x80:
+            n += 1
+        elif o in (0x8D, 0xAD, 0x8E, 0x8C, 0xAE, 0xAC, 0xBD, 0x9D, 0xB9, 0x99) and (h in (0x20, 0x40) or 3 <= h <= 7):
+            n += 1
+    return n
+
+
+def from_prg(prg, have, block=1024, min_hits=8, max_code=6):
+    """程序里原样存着的图案：很多汉化 / 移植卡把图案不压缩地放在程序里，用到时整块拷进显存。
+    程序按 block 字节切块：块里按 16 字节对齐、已经收到的（非全空）图块有 min_hits 个以上，就当它是一块图案；
+    再从这些块往两边扩到相邻的、不像程序（_code_score <= max_code）的块——跑游戏没走到的关卡的图案多半挨着放。
+    返回新图块列表：离确认的块近的在前（贴图放不下时先舍远的），不含 have 里已有的、全空的"""
+    n = len(prg) // block
+    chunks = [[prg[b * block + i:b * block + i + 16] for i in range(0, block, 16)] for b in range(n)]
+    dist = {}
+    for b in range(n):
+        if sum(1 for c in chunks[b] if c in have and any(c)) >= min_hits:
+            dist[b] = 0
+    edge = list(dist)
+    code = {}
+    while edge:
+        nxt = []
+        for b in edge:
+            for nb in (b - 1, b + 1):
+                if 0 <= nb < n and nb not in dist:
+                    if nb not in code:
+                        code[nb] = _code_score(prg[nb * block:(nb + 1) * block])
+                    if code[nb] <= max_code:
+                        dist[nb] = dist[b] + 1
+                        nxt.append(nb)
+        edge = nxt
+    out, got = [], set()
+    for b in sorted(dist, key=lambda b: (dist[b], b)):
+        for c in chunks[b]:
+            if any(c) and c not in have and c not in got:
+                got.add(c)
+                out.append(c)
+    return out
