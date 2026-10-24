@@ -12,6 +12,7 @@ local band, bor = bit.band, bit.bor
 local FONT = STANDARD_TEXT_FONT
 local GOLD = { 0.79, 0.67, 0.44 }
 local FRAME = 1 / 60.0988                      -- NTSC 帧率
+local DRAW_FPS = 30                            -- 画面最多每秒画几次（模拟照样每秒 60 帧，游戏速度不变）
 local TITLE_H, BAR_H, PAD = 28, 34, 10
 local GAME_MIN_W, GAME_MIN_H = 600, 420
 local COLS, ROWS, GAP = 5, 3, 8                 -- 游戏库：封面卡片 5 列 3 行，滚轮翻行
@@ -675,6 +676,7 @@ function NesLab.StartGame(cart, rom, m, scr, scale)
 	g.mute:SetLabel(db.muted and "声音：关" or "声音：开")
 	NesLab.SetPaused(InCombatLockdown())            -- 加载途中进了战斗：先暂停（这时键盘、手柄都没接管）
 	local acc, frames, cpuMs, drawMs, shown, last = 0, 0, 0, 0, 0, GetTime()
+	local drawAcc = 0
 	g:SetScript("OnUpdate", function(_, elapsed)
 		if P.paused then return end
 		if ((P.m.pad.held or 0) ~= 0 or (P.m.pad2.held or 0) ~= 0) and GetCurrentKeyBoardFocus() then   -- 输入框抢了键盘：全放开
@@ -695,7 +697,9 @@ function NesLab.StartGame(cart, rom, m, scr, scale)
 			cpuMs = cpuMs + debugprofilestop() - t
 			acc, ran, frames = acc - FRAME, ran + 1, frames + 1
 		end
-		if ran > 0 then
+		drawAcc = drawAcc + elapsed
+		if ran > 0 and drawAcc >= 1 / DRAW_FPS - 0.002 then
+			drawAcc = 0
 			local t = debugprofilestop()
 			P.scr.Render(P.m.ppu)
 			drawMs = drawMs + debugprofilestop() - t
