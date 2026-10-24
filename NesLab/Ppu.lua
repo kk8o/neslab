@@ -2,6 +2,9 @@
 -- 不逐点算像素：每帧结束交给 Screen 按图块表 / 属性表 / 调色板 / OAM 画。
 -- 画面中途改卷屏（写 $2005 / $2006 / $2000）记成「横带」：从下一条扫描线起换新的卷屏位置，Screen 分带画，
 -- 状态栏这类分屏能显示对。精灵 0 碰撞按扫描线近似：精灵 0 第一行不透明像素所在的线置位。
+-- 图案在卡带内存里（CHR RAM，rom.chrRam）的游戏：图案是游戏运行时写进去的，贴图没法按地址预先烘。
+-- tools/chrram.py 先在电脑上把游戏跑一阵，收集它写过的所有图块，按内容烘进贴图（rom.tiles 是这些图块的十六进制）；
+-- 这里每个 16 字节的图块按内容查到贴图里的号（p.SLOT），Screen 按它画。查不到的交给 p.onUnknownTile 记下，以后补烘。
 local band, bor, rshift, lshift = bit.band, bit.bor, bit.rshift, bit.lshift
 
 local MAX_BANDS = 240                         -- 一行一段也够（伪 3D 赛车这类游戏每行都改卷屏）
@@ -31,7 +34,13 @@ function NesLab.NewPpu(rom, machine)
 	for i = 0, 255 do p.OAM[i] = 0xFF end
 	for i = 0, 4095 do p.VRAM[i] = 0 end            -- 一般卡带只用前 2 KB；四屏卡带（卡带自带 2 KB 显存）用满 4 KB
 	for i = 0, 31 do p.PAL[i] = 0x0F end
-	local CHR, chrSize = Hex(rom.chr)
+	local CHR, chrSize
+	if rom.chrRam then
+		CHR, chrSize = {}, 8192
+		for i = 0, 8191 do CHR[i] = 0 end
+	else
+		CHR, chrSize = Hex(rom.chr)
+	end
 	p.CHR = CHR
 	local VRAM, PAL, OAM = p.VRAM, p.PAL, p.OAM
 
@@ -103,9 +112,63 @@ function NesLab.NewPpu(rom, machine)
 		return PAL[PalIndex(a)]
 	end
 
+	-- CHR RAM：图块内容 → 贴图里的号
+	local SLOT, dirty, index
+	if rom.chrRam then
+		index = rom.tileIndex
+		if not index then                               -- 同一张卡带只建一次（重置、读档不用再建）
+			index = {}
+			local hex = rom.tiles or ""
+			for s = 0, #hex / 32 - 1 do
+				local key = hex:sub(s * 32 + 1, s * 32 + 32):gsub("%x%x", function(h) return string.char(tonumber(h, 16)) end)
+				index[key] = index[key] or s
+			end
+			rom.tileIndex = index
+		end
+		SLOT, dirty = {}, {}
+		for t = 0, 511 do SLOT[t], dirty[t] = 0, true end
+		p.SLOT, p.chrGen, p.chrDirty = SLOT, NesLab.genSeq, true
+	end
+	local blank = string.rep("\0", 16)
+	-- 写过的图块按内容重新查号（Screen 画之前调；没画的帧不用查）
+	function p.ResolveChr()
+		if not p.chrDirty then return end
+		p.chrDirty = false
+		local changed = false
+		for t in pairs(dirty) do
+			local key = string.char(unpack(CHR, t * 16, t * 16 + 15))
+			local s = index[key]
+			if not s then
+				s = 0                                      -- 没烘到的图块先空着（0 号是全空的图块）
+				if key ~= blank and p.onUnknownTile then p.onUnknownTile(key) end
+			end
+			if SLOT[t] ~= s then
+				SLOT[t] = s
+				changed = true
+			end
+		end
+		wipe(dirty)
+		if changed then p.chrGen = p.chrGen + 1 end
+	end
+	function p.ChrAllDirty()                          -- 读档后整张重查
+		if not dirty then return end
+		for t = 0, 511 do dirty[t] = true end
+		p.chrDirty = true
+	end
+
 	local function VramWrite(a, val)
 		a = a % 0x4000
-		if a < 0x2000 then return end                    -- CHR ROM 只读
+		if a < 0x2000 then                               -- CHR ROM 只读；CHR RAM 记下哪个图块变了
+			if dirty then
+				local i = ChrIndex(a)
+				if CHR[i] ~= val then
+					CHR[i] = val
+					dirty[(i - i % 16) / 16] = true
+					p.chrDirty = true
+				end
+			end
+			return
+		end
 		if a < 0x3F00 then
 			local i = NTI((a - 0x2000) % 4096)
 			if VRAM[i] ~= val then

@@ -3,9 +3,11 @@
 #   NesLab_<id>.toc  游戏名、卡带类型、大小写在 X-NesLab-* 字段里，游戏库不加载卡带也能列出来
 #   cart.lua         程序（PRG）、图案（CHR）十六进制，镜像方式、mapper，每个图块用到哪几种颜色
 #   tiles.blp        图块贴图：每个图块拆成颜色 1 / 2 / 3 三张白色蒙版（游戏里分别着色），一格 8×8，一行 32 格；
-#                    BLP（DXT1，只有白和透明，原样无损，是 32 位 TGA 的八分之一；tools/blp.py）
+#                    BLP（DXT1，只有白和透明，原样无损，是 32 位 TGA 的八分之一；tools/blp.py、atlas.py）
+# 图案在卡带内存里（CHR RAM）的卡带：先用 chrram.py 把游戏跑一阵收集它写过的图块，烘成贴图，cart.lua 记 chrRam + tiles；
+# 重转同一个编号会保留以前收到的图块，再加上游戏里记下的没烘到的图块（NesLabDB.chrWanted）。
 # 声音用 NesLab\sound 里的共用音色库（所有游戏通用）；还没生成就顺手生成（要 ffmpeg）。
-# 支持 mapper 0 NROM、1 MMC1、2 UxROM、3 CNROM、4 MMC3、66 GxROM、140 Jaleco，图案要写死在卡带里（CHR ROM）。带电池的卡带存档进 NesLabDB。
+# 支持 mapper 0 NROM、1 MMC1、2 UxROM、3 CNROM、4 MMC3、7 AxROM、34 BNROM、66 GxROM、140 Jaleco。带电池的卡带存档进 NesLabDB。
 # 转换完要重启游戏，游戏库里才看得到。
 # 封面（可选）：--cover 标题画面.png，或 --covers 截图文件夹（按 nescovers.py 写的 covers.json 找这个 ROM 的截图，
 # 没有 covers.json 就先生成）。封面存成卡带里的 cover.tga（256×256，上面 240 行是画面），游戏库拿它当图标。
@@ -31,42 +33,16 @@ prg_banks, chr_banks, f6, f7 = data[4], data[5], data[6], data[7]
 if f7 & 0x0C != 0x08 and data[12:16] != bytes(4):     # 老工具在 7-15 字节写过垃圾（如 "DiskDude!"）：高四位不可信
     f7 = 0
 mapper = (f6 >> 4) | (f7 & 0xF0)
-KINDS = {0: "NROM", 1: "MMC1", 2: "UxROM", 3: "CNROM", 4: "MMC3", 66: "GxROM", 140: "Jaleco"}
+KINDS = {0: "NROM", 1: "MMC1", 2: "UxROM", 3: "CNROM", 4: "MMC3", 7: "AxROM", 34: "BNROM", 66: "GxROM", 140: "Jaleco"}
 if mapper not in KINDS:
-    sys.exit("暂时只支持 NROM / MMC1 / UxROM / CNROM / MMC3 / GxROM / Jaleco（mapper 0-4、66、140），这个是 mapper %d" % mapper)
-if chr_banks == 0:
-    sys.exit("这个卡带的图案在运行时才写进去（CHR RAM），图块贴图没法预先烘，暂不支持")
+    sys.exit("暂时只支持 %s（mapper %s），这个是 mapper %d"
+             % (" / ".join(KINDS.values()), "、".join(map(str, KINDS)), mapper))
+chr_ram = chr_banks == 0
 off = 16 + (512 if f6 & 0x04 else 0)
 prg = data[off:off + prg_banks * 16384]
 chr_ = data[off + len(prg):off + len(prg) + chr_banks * 8192]
 mirror = "4" if f6 & 0x08 else ("V" if f6 & 0x01 else "H")   # 4 = 四屏（卡带自带显存，四张图块表各自独立）
 battery = bool(f6 & 0x02)
-tiles = len(chr_) // 16
-
-# 图块贴图：一行 32 格起，图案多就加宽，让高度不超过 2048
-SLOTS_PER_ROW = 32
-while (tiles * 3 + SLOTS_PER_ROW - 1) // SLOTS_PER_ROW * 8 > 2048 and SLOTS_PER_ROW < 256:
-    SLOTS_PER_ROW *= 2
-W, H = SLOTS_PER_ROW * 8, 8
-while H < (tiles * 3 + SLOTS_PER_ROW - 1) // SLOTS_PER_ROW * 8:
-    H *= 2
-pix = bytearray(W * H * 4)
-used = []
-for t in range(tiles):
-    p0, p1 = chr_[t * 16:t * 16 + 8], chr_[t * 16 + 8:t * 16 + 16]
-    mask = 0
-    for r in range(8):
-        for c in range(8):
-            bit = 7 - c
-            v = ((p0[r] >> bit) & 1) | (((p1[r] >> bit) & 1) << 1)
-            if v == 0:
-                continue
-            mask |= 1 << (v - 1)
-            s = t * 3 + (v - 1)
-            x, y = (s % SLOTS_PER_ROW) * 8 + c, (s // SLOTS_PER_ROW) * 8 + r
-            i = (y * W + x) * 4
-            pix[i:i + 4] = b"\xff\xff\xff\xff"
-    used.append("%d" % mask)
 
 sys.path.insert(0, HERE)
 from names import folder_name
@@ -124,12 +100,39 @@ if cover:
 elif os.path.exists(cover_tga):
     os.remove(cover_tga)
 
-sys.path.insert(0, HERE)
-import numpy as np
-from blp import write_dxt1_mask
-write_dxt1_mask(os.path.join(out, "tiles.blp"), np.frombuffer(bytes(pix), dtype=np.uint8).reshape(H, W, 4)[:, :, 3])
+import atlas
 
-size_kb = (len(prg) + len(chr_)) // 1024
+tiles_hex = ""
+if chr_ram:
+    import chrram
+    BLANK = bytes(16)
+    known = [BLANK]                                          # 0 号是全空的图块（没烘到的先用它）
+    old_cart = os.path.join(out, "cart.lua")
+    if os.path.exists(old_cart):                             # 以前收到的图块（贴图号不变，读档、存档不受影响）
+        m = re.search(r'\ttiles = "([0-9A-F]*)"', open(old_cart, encoding="utf-8").read())
+        if m:
+            known = [bytes.fromhex(m.group(1)[i:i + 32]) for i in range(0, len(m.group(1)), 32)] or known
+    have = set(known)
+    print("CHR RAM：跑游戏收集图块……")
+    got = chrram.collect({"id": rid, "prg": prg.hex().upper(), "chr": "", "mapper": mapper, "mirror": mirror,
+                          "battery": battery})
+    import chrlearn
+    wanted = [bytes.fromhex(h) for h in sorted(chrlearn.wanted().get(rid, ()))]
+    new = [k for k, _ in sorted(got, key=lambda kv: -kv[1])] + wanted   # 超出贴图上限时先留见得多的
+    added = 0
+    for k in new:
+        if k not in have and len(known) < atlas.MAX_TILES:
+            have.add(k)
+            known.append(k)
+            added += 1
+    print("图块 %d 种（这次新加 %d，游戏里记下的 %d）" % (len(known), added, len(wanted)))
+    chr_ = b""
+    tiles_hex = b"".join(known).hex().upper()
+    W, H, SLOTS_PER_ROW, used = atlas.write(out, b"".join(known))
+else:
+    W, H, SLOTS_PER_ROW, used = atlas.write(out, chr_)
+
+size_kb = (len(prg) + (8192 if chr_ram else len(chr_))) // 1024
 kind = KINDS[mapper]
 lua_name = name.replace("\\", "\\\\").replace('"', '\\"')
 with open(os.path.join(out, "cart.lua"), "w", encoding="utf-8") as f:
@@ -140,7 +143,10 @@ with open(os.path.join(out, "cart.lua"), "w", encoding="utf-8") as f:
     f.write('\tatlasPath = "Interface\\\\AddOns\\\\%s\\\\tiles", atlasW = %d, atlasH = %d, slotsPerRow = %d,\n'
             % (folder, W, H, SLOTS_PER_ROW))
     f.write('\tatlasBlp = "Interface\\\\AddOns\\\\%s\\\\tiles.blp",\n' % folder)
-    f.write('\tused = "%s",\n' % "".join(used))
+    f.write('\tused = "%s",\n' % used)
+    if chr_ram:
+        f.write('\tchrRam = true,\n')
+        f.write('\ttiles = "%s",\n' % tiles_hex)
     f.write('\tprg = "%s",\n' % prg.hex().upper())
     f.write('\tchr = "%s",\n' % chr_.hex().upper())
     f.write("})\n")

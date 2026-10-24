@@ -1,7 +1,7 @@
 -- 一台 NES：地址分配（2 KB RAM 镜像、PPU 寄存器、OAM DMA、APU、手柄、卡带）和逐扫描线的帧时序。
 -- 卡带：程序 4 个 8 KB 窗口（$8000 / $A000 / $C000 / $E000），图案 8 个 1 KB 窗口（ppu.chr1k），8 KB 存档内存
 -- （$6000-$7FFF，带电池的游戏由 Player 存进 NesLabDB）。mapper：0 NROM、1 MMC1、2 UxROM、3 CNROM、4 MMC3、
--- 66 GxROM、140 Jaleco（图案都要写死在卡带里）。MMC3 的扫描线计数：开着显示时每条可见线和预渲染线数一次，数到 0 拉起 IRQ。
+-- 7 AxROM、34 BNROM、66 GxROM、140 Jaleco；图案可以写死在卡带里（CHR ROM），也可以是游戏运行时写的（CHR RAM，见 Ppu.lua）。MMC3 的扫描线计数：开着显示时每条可见线和预渲染线数一次，数到 0 拉起 IRQ。
 -- 时序：先跑垂直空白（241 线置位、开了 NMI 就进中断）和预渲染线，再跑 0-239 可见线
 -- （每线 341 / 3 个 CPU 周期，精灵 0 碰撞按线置位）；画面由 Screen 按这一帧的 PPU 状态画。窗口在 Player.lua。
 local band, bor = bit.band, bit.bor
@@ -29,6 +29,16 @@ local function NewMapper(rom, ppu, c)
 			local b = (v % 4) * 2
 			c.SetChr4k(b, b + 1)
 		end
+	elseif id == 7 then                             -- AxROM：换整 32 KB 程序，第 4 位选单屏图块表
+		local function Write(_, v)
+			c.SetPrg16((v % 8) * 2, (v % 8) * 2 + 1)
+			ppu.SetMirror(band(v, 0x10) ~= 0 and "B" or "A")
+		end
+		Write(0, 0)
+		return Write
+	elseif id == 34 then                            -- BNROM：换整 32 KB 程序
+		c.SetPrg16(0, 1)
+		return function(_, v) c.SetPrg16((v % 64) * 2, (v % 64) * 2 + 1) end
 	elseif id == 66 or id == 140 then               -- GxROM（$8000-$FFFF）/ Jaleco（$6000-$7FFF）：32 KB 程序 + 8 KB 图案
 		local function Write(_, v)
 			local p32 = math.floor(v / 16) % 4
@@ -164,7 +174,7 @@ function NesLab.NewMachine(rom)
 	local banks8 = math.max(1, prgSize / 8192)
 	local banks16 = math.max(1, prgSize / 16384)
 	local p0, p1, p2, p3 = 0, 8192 % prgSize, 16384 % prgSize, 24576 % prgSize
-	local chr1k, chrBanks1k = ppu.chr1k, math.max(1, #rom.chr / 2 / 1024)
+	local chr1k, chrBanks1k = ppu.chr1k, rom.chrRam and 8 or math.max(1, #rom.chr / 2 / 1024)
 	local c = { banks8 = banks8, banks16 = banks16, io = io }
 	function c.SetPrg8(a, b, d, e)
 		p0, p1, p2, p3 = (a % banks8) * 8192, (b % banks8) * 8192, (d % banks8) * 8192, (e % banks8) * 8192
@@ -196,7 +206,7 @@ function NesLab.NewMachine(rom)
 			if a < 0xA000 then return PRG[p0 + a - 0x8000] end
 			if a < 0xC000 then return PRG[p1 + a - 0xA000] end
 			if a < 0xE000 then return PRG[p2 + a - 0xC000] end
-			return PRG[p3 + a - 0xE000]
+			return PRG[p3 + a - 0xE000] or rd(a % 0x10000)   -- 程序计数器跑过 $FFFF：真机回到 $0000（跑飞的游戏不至于报错）
 		end
 		if a < 0x2000 then return RAM[a % 2048] end
 		if a >= 0x6000 then return WRAM[a - 0x6000] end
@@ -287,6 +297,7 @@ function NesLab.NewMachine(rom)
 		return {
 			v = 1, cpu = { cpu.state() }, prg = { p0, p1, p2, p3 }, chr = chr,
 			ram = ToHex(RAM, 2048), wram = (rom.battery or m.wramUsed) and ToHex(WRAM, 8192) or nil,
+			chrRam = rom.chrRam and ToHex(ppu.CHR, 8192) or nil,
 			vram = ToHex(ppu.VRAM, ppu.fourScreen and 4096 or 2048), pal = ToHex(ppu.PAL, 32), oam = ToHex(ppu.OAM, 256),
 			ppu = { ppu.ctrl, ppu.mask, ppu.status, ppu.oamAddr, ppu.v, ppu.t, ppu.x, ppu.w, ppu.buf, ppu.mirror },
 			mapper = MapperSave and MapperSave() or nil, apu = apu.SaveState(),
@@ -302,6 +313,10 @@ function NesLab.NewMachine(rom)
 		if s.wram then FromHex(WRAM, s.wram, 8192) else for i = 0, 8191 do WRAM[i] = 0 end end
 		m.wramUsed = s.wram ~= nil                     -- 读回来的存档内存，下次存档也要带上
 		FromHex(ppu.VRAM, s.vram, #s.vram / 2)
+		if rom.chrRam and s.chrRam then
+			FromHex(ppu.CHR, s.chrRam, 8192)
+			ppu.ChrAllDirty()
+		end
 		FromHex(ppu.PAL, s.pal, 32)
 		FromHex(ppu.OAM, s.oam, 256)
 		local r = s.ppu

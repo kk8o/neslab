@@ -9,6 +9,7 @@ KEEP = {
     "NesLab": ["NesLab.toc", "Cpu.lua", "Ppu.lua", "Apu.lua", "Screen.lua", "Sound.lua", "Nes.lua", "Player.lua",
                "Binds.lua", "Minimap.lua", "sound/*.ogg",
                "tools/nes2cart.py", "tools/nescovers.py", "tools/names.py", "tools/blp.py", "tools/dmc2ogg.py",
+               "tools/atlas.py", "tools/chrram.py", "tools/chrlearn.py",
                "tools/make_samples.py", "tools/make_demo.py", "tools/make_demo_mmc1.py", "tools/nesasm.py"],
     "NesLab_Dev": ["NesLab_Dev.toc", "NestestData.lua", "Nestest.lua", "Bench.lua"],
     "NesLab_demo": ["NesLab_demo.toc", "cart.lua", "tiles.blp"],

@@ -674,6 +674,7 @@ function NesLab.StartGame(cart, rom, m, scr, scale)
 	m.sound, m.apu.onEvent, m.apu.onDmc = snd, snd.Event, snd.Dmc
 	snd.cartId, snd.dmcDir, snd.PrgOffset = rom.id, "Interface\\AddOns\\" .. cart.addon .. "\\dmc\\", m.apu.PrgOffset
 	P.snd = snd
+	NesLab.WatchTiles(m, rom)
 	g.mute:SetLabel(db.muted and "声音：关" or "声音：开")
 	NesLab.SetPaused(InCombatLockdown())            -- 加载途中进了战斗：先暂停（这时键盘、手柄都没接管）
 	local acc, frames, cpuMs, drawMs, shown, last = 0, 0, 0, 0, 0, GetTime()
@@ -767,6 +768,32 @@ function NesLab.SetPaused(v)
 	NesLab.ReleaseAll()
 end
 
+-- CHR RAM 卡带：贴图里没烘到的图块记进 NesLabDB.chrWanted（卡带 id → 图块十六进制），退出游戏后跑 tools/chrlearn.py 补烘
+local WANTED_MAX = 4000
+function NesLab.WatchTiles(m, rom)
+	if not rom.chrRam then return end
+	local db = DB()
+	db.chrWanted = db.chrWanted or {}
+	local w = db.chrWanted[rom.id] or {}
+	db.chrWanted[rom.id] = w
+	local n, index = 0, rom.tileIndex or {}
+	for hex in pairs(w) do                         -- 已经补烘进贴图的不用再记
+		if index[hex:gsub("%x%x", function(h) return string.char(tonumber(h, 16)) end)] then
+			w[hex] = nil
+		else
+			n = n + 1
+		end
+	end
+	m.ppu.onUnknownTile = function(key)
+		if n >= WANTED_MAX then return end
+		local hex = key:gsub(".", function(c) return string.format("%02X", c:byte()) end)
+		if not w[hex] then
+			w[hex] = true
+			n = n + 1
+		end
+	end
+end
+
 function NesLab.Reset()
 	if not P.rom then return end
 	NesLab.SaveBattery()
@@ -774,6 +801,7 @@ function NesLab.Reset()
 	if P.rom.battery then m.LoadSave(DB().saves and DB().saves[P.rom.id]) end
 	m.sound, m.apu.onEvent, m.apu.onDmc = P.snd, P.snd and P.snd.Event, P.snd and P.snd.Dmc
 	if P.snd then P.snd.PrgOffset = m.apu.PrgOffset end
+	NesLab.WatchTiles(m, P.rom)
 	if P.snd then P.snd.StopAll() end
 	if P.scr then P.scr.Invalidate() end           -- 新机器：画面缓存作废
 	P.m, NesLab.machine = m, m

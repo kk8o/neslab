@@ -7,6 +7,7 @@
 --   · 格子记着（图块号, 调色板组）和那组调色板的版本号：图块变了才重新取贴图，只是颜色变了只改颜色。
 -- 精灵 64 个，各一个框：在背景前的放在背景层上面，在背景后的放在下面（背景不透明处自然挡住它）。
 -- 一套画面可以换卡带（SetRom）：贴图块全部复用，换游戏不再多建一套。
+-- 图案在卡带内存里的游戏（CHR RAM）：图块号先经 p.SLOT 换成贴图里的号（按图块内容查，见 Ppu.lua）。
 local band, rshift = bit.band, bit.rshift
 local BIT = { 1, 2, 4 }
 
@@ -144,6 +145,7 @@ function NesLab.NewScreen(parent, rom, scale)
 	end
 
 	-- bd：PPU 记的横带（卷屏、背景那张图案表的 4 个 1 KB 窗口 m0-m3）；b：这条横带的画面格子
+	local SL, chrGen                                -- CHR RAM：图块号 → 贴图号、图块内容的版本号（Render 时取）
 	local function DrawBand(p, b, top, h, bd)
 		local VRAM, PAL, NTI, pgen, ntGen, bgGen = p.VRAM, p.PAL, p.NTI, p.pgen, p.ntGen, p.bgPalGen
 		local sx, sy = bd.sx % 512, bd.sy % 480
@@ -165,10 +167,11 @@ function NesLab.NewScreen(parent, rom, scale)
 		local m0, m1, m2, m3 = bd.m0, bd.m1, bd.m2, bd.m3
 		local span = h + fy
 		if b.x0 == x0 and b.y0 == y0 and b.span == span and b.ntGen == ntGen and b.bgGen == bgGen
-			and b.m0 == m0 and b.m1 == m1 and b.m2 == m2 and b.m3 == m3 then
+			and b.m0 == m0 and b.m1 == m1 and b.m2 == m2 and b.m3 == m3 and b.chrGen == chrGen then
 			return
 		end
 		b.x0, b.y0, b.span, b.ntGen, b.bgGen, b.m0, b.m1, b.m2, b.m3 = x0, y0, span, ntGen, bgGen, m0, m1, m2, m3
+		b.chrGen = chrGen
 		local M = b.M or {}                             -- 图块号 / 64 → 贴图里的起始号
 		b.M = M
 		M[0], M[1], M[2], M[3] = m0 * 64, m1 * 64, m2 * 64, m3 * 64
@@ -201,6 +204,7 @@ function NesLab.NewScreen(parent, rom, scale)
 				local off = (ntX + (ty >= 30 and 2 or 0)) * 1024
 				local t = VRAM[NTI(off + ly * 32 + lx)]
 				local tile = M[math.floor(t / 64)] + t % 64
+				if SL then tile = SL[tile] end
 				local attr = VRAM[NTI(off + 960 + math.floor(ly / 4) * 8 + ax)]
 				local pal = rshift(attr, (ly % 4 >= 2 and 4 or 0) + sxh) % 4
 				local cell = Cell(b, r, c)
@@ -242,7 +246,11 @@ function NesLab.NewScreen(parent, rom, scale)
 		sprites[i] = f
 	end
 
-	local function Phys(chr1k, w, t) return chr1k[w + math.floor(t / 64)] * 64 + t % 64 end   -- 贴图里的图块号
+	local function Phys(chr1k, w, t)                -- 贴图里的图块号
+		local n = chr1k[w + math.floor(t / 64)] * 64 + t % 64
+		if SL then return SL[n] end
+		return n
+	end
 	-- 精灵按它第一条线所在的横带画：那条横带的图案窗口、精灵大小、精灵开关
 	local function DrawSprites(p)
 		local OAM, PAL, pgen = p.OAM, p.PAL, p.pgen
@@ -261,8 +269,8 @@ function NesLab.NewScreen(parent, rom, scale)
 				local w8 = band(bd.spr, 8) ~= 0 and 4 or 0               -- 8×8 精灵用哪张图案表
 				local key = ((y * 256 + x) * 256 + tile) * 256 + attr
 				local gen = pgen[4 + band(attr, 3)]
-				if f.key ~= key or f.tbl ~= bd.key then
-					f.key, f.gen, f.tbl = key, gen, bd.key
+				if f.key ~= key or f.tbl ~= bd.key or f.chrGen ~= chrGen then
+					f.key, f.gen, f.tbl, f.chrGen = key, gen, bd.key, chrGen
 					local flipH, flipV = band(attr, 0x40) ~= 0, band(attr, 0x80) ~= 0
 					local palBase = 16 + band(attr, 3) * 4
 					f:ClearAllPoints()
@@ -295,6 +303,13 @@ function NesLab.NewScreen(parent, rom, scale)
 
 	function scr.Render(p)
 		newCells = 0
+		SL = p.SLOT
+		if SL then
+			p.ResolveChr()
+			chrGen = p.chrGen
+		else
+			chrGen = nil
+		end
 		local c = band(p.PAL[0], 0x3F)
 		if c ~= scr.bgColor then
 			scr.bgColor = c
