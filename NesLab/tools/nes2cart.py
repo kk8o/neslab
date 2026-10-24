@@ -39,7 +39,7 @@ if chr_banks == 0:
 off = 16 + (512 if f6 & 0x04 else 0)
 prg = data[off:off + prg_banks * 16384]
 chr_ = data[off + len(prg):off + len(prg) + chr_banks * 8192]
-mirror = "V" if f6 & 0x01 else "H"
+mirror = "4" if f6 & 0x08 else ("V" if f6 & 0x01 else "H")   # 4 = 四屏（卡带自带显存，四张图块表各自独立）
 battery = bool(f6 & 0x02)
 tiles = len(chr_) // 16
 

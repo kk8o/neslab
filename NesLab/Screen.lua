@@ -92,10 +92,15 @@ function NesLab.NewScreen(parent, rom, scale)
 		end
 		return col
 	end
+	-- 新建格子每帧限量：每行都切卷屏的游戏一下要上万个贴图块，一次建完会卡住游戏，分几帧建完
+	local NEW_CELLS_PER_FRAME = 400
+	local newCells = 0
 	local function Cell(b, r, c)
 		local k = r * COLS + c
 		local cell = b.cells[k]
 		if not cell then
+			if newCells >= NEW_CELLS_PER_FRAME then return nil end
+			newCells = newCells + 1
 			local col = Col(b, c)
 			cell = { NewTex(col, 1), NewTex(col, 2), NewTex(col, 3) }
 			for j = 1, 3 do cell[j]:SetPoint("TOPLEFT", 0, -r * 8 * S) end
@@ -200,7 +205,9 @@ function NesLab.NewScreen(parent, rom, scale)
 				local pal = rshift(attr, (ly % 4 >= 2 and 4 or 0) + sxh) % 4
 				local cell = Cell(b, r, c)
 				local key, gen = tile * 4 + pal, pgen[pal]
-				if cell.key ~= key or cell.hidden then
+				if not cell then
+					b.pending = true                      -- 这一帧的新建额度用完了：下一帧接着建
+				elseif cell.key ~= key or cell.hidden then
 					cell.key, cell.gen, cell.hidden = key, gen, nil
 					Paint(cell, tile, pal * 4, PAL)
 				elseif cell.gen ~= gen then
@@ -217,6 +224,7 @@ function NesLab.NewScreen(parent, rom, scale)
 			end
 		end
 		b.rows = rows
+		if b.pending then b.pending, b.x0 = nil, nil end  -- 没建完的横带下一帧不能跳过
 	end
 
 	-- 精灵
@@ -286,6 +294,7 @@ function NesLab.NewScreen(parent, rom, scale)
 	scr.debug = { bands = bands, sprites = sprites, U0 = U0, V0 = V0 }   -- 调试用
 
 	function scr.Render(p)
+		newCells = 0
 		local c = band(p.PAL[0], 0x3F)
 		if c ~= scr.bgColor then
 			scr.bgColor = c

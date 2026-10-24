@@ -4,7 +4,7 @@
 -- 状态栏这类分屏能显示对。精灵 0 碰撞按扫描线近似：精灵 0 第一行不透明像素所在的线置位。
 local band, bor, rshift, lshift = bit.band, bit.bor, bit.rshift, bit.lshift
 
-local MAX_BANDS = 16                          -- 写显示开关也会开新带
+local MAX_BANDS = 240                         -- 一行一段也够（伪 3D 赛车这类游戏每行都改卷屏）
 
 local function Hex(s)
 	local t = {}
@@ -29,7 +29,7 @@ function NesLab.NewPpu(rom, machine)
 	p.ntGen, p.bgPalGen = NesLab.genSeq, NesLab.genSeq
 	for g = 0, 7 do p.pgen[g] = NesLab.genSeq end
 	for i = 0, 255 do p.OAM[i] = 0xFF end
-	for i = 0, 2047 do p.VRAM[i] = 0 end
+	for i = 0, 4095 do p.VRAM[i] = 0 end            -- 一般卡带只用前 2 KB；四屏卡带（卡带自带 2 KB 显存）用满 4 KB
 	for i = 0, 31 do p.PAL[i] = 0x0F end
 	local CHR, chrSize = Hex(rom.chr)
 	p.CHR = CHR
@@ -42,9 +42,12 @@ function NesLab.NewPpu(rom, machine)
 		H = function(off) return (off >= 2048 and 1024 or 0) + off % 1024 end,
 		A = function(off) return off % 1024 end,
 		B = function(off) return 1024 + off % 1024 end,
+		["4"] = function(off) return off % 4096 end,   -- 四屏：四张图块表各自独立
 	}
+	p.fourScreen = rom.mirror == "4"
 	local NTI
 	function p.SetMirror(mode)
+		if p.fourScreen then mode = "4" end            -- 四屏卡带：游戏写的镜像设置不起作用
 		if mode == p.mirror and NTI then return end    -- MMC1 / MMC3 每次换页都会写一遍镜像：没变就不算
 		NTI = MIRROR[mode] or MIRROR.H
 		p.NTI, p.mirror = NTI, mode
@@ -198,6 +201,7 @@ function NesLab.NewPpu(rom, machine)
 				p.x = band(val, 7)
 				p.t = bor(band(p.t, 0xFFE0), rshift(val, 3))
 				p.w = 1
+				Split("x")                                 -- 横向卷动下一行就生效（每行只写一次 $2005 的赛车游戏靠它画弯道）
 			else
 				p.t = bor(band(p.t, 0x8C1F), lshift(band(val, 7), 12), lshift(rshift(val, 3), 5))
 				p.w = 0

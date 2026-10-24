@@ -287,7 +287,7 @@ function NesLab.NewMachine(rom)
 		return {
 			v = 1, cpu = { cpu.state() }, prg = { p0, p1, p2, p3 }, chr = chr,
 			ram = ToHex(RAM, 2048), wram = (rom.battery or m.wramUsed) and ToHex(WRAM, 8192) or nil,
-			vram = ToHex(ppu.VRAM, 2048), pal = ToHex(ppu.PAL, 32), oam = ToHex(ppu.OAM, 256),
+			vram = ToHex(ppu.VRAM, ppu.fourScreen and 4096 or 2048), pal = ToHex(ppu.PAL, 32), oam = ToHex(ppu.OAM, 256),
 			ppu = { ppu.ctrl, ppu.mask, ppu.status, ppu.oamAddr, ppu.v, ppu.t, ppu.x, ppu.w, ppu.buf, ppu.mirror },
 			mapper = MapperSave and MapperSave() or nil, apu = apu.SaveState(),
 			irq = m.irq, nmi = m.nmiPending, debt = debt, stall = stall,
@@ -301,7 +301,7 @@ function NesLab.NewMachine(rom)
 		FromHex(RAM, s.ram, 2048)
 		if s.wram then FromHex(WRAM, s.wram, 8192) else for i = 0, 8191 do WRAM[i] = 0 end end
 		m.wramUsed = s.wram ~= nil                     -- 读回来的存档内存，下次存档也要带上
-		FromHex(ppu.VRAM, s.vram, 2048)
+		FromHex(ppu.VRAM, s.vram, #s.vram / 2)
 		FromHex(ppu.PAL, s.pal, 32)
 		FromHex(ppu.OAM, s.oam, 256)
 		local r = s.ppu
