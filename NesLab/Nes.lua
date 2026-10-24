@@ -176,8 +176,10 @@ function NesLab.NewMachine(rom)
 	local p0, p1, p2, p3 = 0, 8192 % prgSize, 16384 % prgSize, 24576 % prgSize
 	local chr1k, chrBanks1k = ppu.chr1k, rom.chrRam and 8 or math.max(1, #rom.chr / 2 / 1024)
 	local c = { banks8 = banks8, banks16 = banks16, io = io }
+	local cpu
 	function c.SetPrg8(a, b, d, e)
 		p0, p1, p2, p3 = (a % banks8) * 8192, (b % banks8) * 8192, (d % banks8) * 8192, (e % banks8) * 8192
+		if cpu then cpu.setPrg(p0, p1, p2, p3) end
 	end
 	function c.SetPrg16(a, b)
 		c.SetPrg8((a % banks16) * 2, (a % banks16) * 2 + 1, (b % banks16) * 2, (b % banks16) * 2 + 1)
@@ -199,6 +201,7 @@ function NesLab.NewMachine(rom)
 	end
 	function c.Irq(v) m.irq = v end
 	local MapperWrite, Scanline, LowWrite, MapperSave, MapperLoad = NewMapper(rom, ppu, c)
+	io.bankLow = LowWrite ~= nil                     -- 写 $6000-$7FFF 也可能换页（CPU 按段编译时要在这里收段）
 
 	local rd
 	rd = function(a)
@@ -264,8 +267,9 @@ function NesLab.NewMachine(rom)
 		if a < 0xE000 then return p2 + a - 0xC000 end
 		return p3 + a - 0xE000
 	end
-	local cpu = NesLab.NewCpu(rd, wr, io, not NesLab.slowCpu and RAM or nil)   -- NesLab.slowCpu：不走快路（对比用）
+	cpu = NesLab.NewCpu(rd, wr, io, not NesLab.slowCpu and RAM or nil, PRG)   -- NesLab.slowCpu：不走快路（对比用）
 	m.cpu = cpu
+	cpu.setPrg(p0, p1, p2, p3)
 	cpu.reset()
 
 	-- 存档内存 ⇄ 十六进制文本（带电池的卡带由 Player 存进 NesLabDB）
@@ -308,6 +312,7 @@ function NesLab.NewMachine(rom)
 		if type(s) ~= "table" or s.v ~= 1 then return false end
 		cpu.setState(unpack(s.cpu))
 		p0, p1, p2, p3 = s.prg[1], s.prg[2], s.prg[3], s.prg[4]
+		cpu.setPrg(p0, p1, p2, p3)
 		for i = 0, 7 do chr1k[i] = s.chr[i + 1] end
 		FromHex(RAM, s.ram, 2048)
 		if s.wram then FromHex(WRAM, s.wram, 8192) else for i = 0, 8191 do WRAM[i] = 0 end end
@@ -354,7 +359,9 @@ function NesLab.NewMachine(rom)
 		if m.irq then debt = debt - irq() end        -- 电平触发：没应答就一直拉着（CPU 屏蔽时 irq 返回 0）
 	end
 
+	local allow = cpu.allow
 	function m.Frame()
+		if allow then allow(6) end                  -- 按段编译：每帧最多编 6 段
 		ppu.line = 241
 		if ppu.VblankStart() then
 			-- 真机先把手上这条指令做完再进 NMI：主循环里「读 $2002 等垂直空白」的那条指令正好读到标志，

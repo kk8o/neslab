@@ -17,6 +17,7 @@
 - **手柄**：开着游戏的手柄模式就能用，窗口开着时手柄只管模拟器，不会让角色乱动
 - **键位设置与测试**：每个键都能改，按下时对应的那一行会亮
 - **声音**：方波、三角波、噪声按音符播放事先合成的音色；DMC（鼓点、人声采样）可以从卡带里还原原声
+- **够快**：CPU 把卡带程序一段段编译成 Lua 函数来跑（跟逐条执行结果完全一样），魂斗罗这类游戏在魔兽里全速 60 帧
 
 ## 支持的卡带
 
@@ -97,7 +98,7 @@ M 静音，Esc 菜单。都可以在游戏库的「键位」里改。
 - `NesLab/tools/make_samples.py`：重新生成 `sound\` 里的音色（要 ffmpeg）
 - `NesLab/tools/make_demo.py`、`make_demo_mmc1.py`：用自带的小汇编器 `nesasm.py` 生成两张自检卡带
 - `NesLab/tools/nescovers.py`：把一批按编号命名的截图和 ROM 自动对上，生成封面对照表（`nes2cart.py --covers`）
-- `NesLab_Dev`：`/neslab bench` 测速；CPU 用 [nestest](https://www.qmtpro.com/~nes/misc/nestest.txt)（kevtris）逐行对照
+- `NesLab_Dev`：`/neslab bench` 测速；CPU 用 [nestest](https://www.qmtpro.com/~nes/misc/nestest.txt)（kevtris）逐行对照，`NesLab.Nestest(nil, true)` 测按段编译；`NesLab.noBlocks = true` 退回逐条执行（对比用）
 
 ## 制作
 

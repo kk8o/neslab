@@ -4,7 +4,7 @@
 ## Notes-zhCN: 在魔兽里玩 NES 游戏：6502 CPU、图块层 PPU、按音符播放的声音。卡带是独立的 NesLab_<名字> 插件，用 tools\nes2cart.py 转换。/neslab 打开游戏库
 ## Notes: NES emulator inside World of Warcraft: 6502 CPU, tile-level PPU, note-based sound. Each game is a separate NesLab_<name> addon made with tools\nes2cart.py. /neslab opens the library
 ## Author: Tim
-## Version: 1.0.2
+## Version: 1.1.0
 ## X-License: MIT
 ## SavedVariables: NesLabDB
 ## IconTexture: Interface\Icons\INV_Gizmo_GoblingTonkController

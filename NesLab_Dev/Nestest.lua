@@ -1,10 +1,10 @@
 -- nestest 自检：从 $C000 开始（自动模式，不需要画面），每条指令执行前把寄存器和累计周期
--- 跟标准执行记录逐行比，返回第一处不一致。NesLab.Nestest(行数上限)
+-- 跟标准执行记录逐行比，返回第一处不一致。NesLab.Nestest(行数上限, 是否按段编译)
 local _, ns = ...
 
 local function Hex(s, i, n) return tonumber(s:sub(i, i + n - 1), 16) end
 
-function NesLab.Nestest(limit)
+function NesLab.Nestest(limit, blocks)
 	local prgHex, log = NesLab.NESTEST_PRG, NesLab.NESTEST_LOG
 	local PRG = {}
 	for i = 0, #prgHex / 2 - 1 do PRG[i] = Hex(prgHex, i * 2 + 1, 2) end
@@ -20,7 +20,15 @@ function NesLab.Nestest(limit)
 	local function wr(a, v)
 		if a < 0x2000 then RAM[a % 2048] = v end
 	end
-	local cpu = NesLab.NewCpu(rd, wr, nil, RAM)        -- 带上内存表：零页 / 栈走 CPU 快路，正好一起测
+	local cpu
+	if blocks then                                   -- 按段编译：每条指令都编成段（run(1) 只跑段里第一条），连翻译一起测
+		NesLab.blockHot = 1
+		cpu = NesLab.NewCpu(rd, wr, nil, RAM, PRG)
+		NesLab.blockHot = nil
+		cpu.setPrg(0, 8192, 0, 8192)
+	else
+		cpu = NesLab.NewCpu(rd, wr, nil, RAM)        -- 带上内存表：零页 / 栈走 CPU 快路，正好一起测
+	end
 	cpu.setPC(0xC000)
 	cpu.setP(0x24)
 	local total = 7
