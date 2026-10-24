@@ -65,6 +65,9 @@ function NesLab.NewScreen(parent, rom, scale)
 		local t = f:CreateTexture(nil, "ARTWORK", nil, sub)
 		t:SetTexture(atlas, "CLAMP", "CLAMP", "NEAREST")
 		t:SetSize(8 * S, 8 * S)
+		-- 不按屏幕像素对齐：放大倍数不是整数时，每块各自取整会在两列 / 两行之间漏出一条黑缝
+		t:SetSnapToPixelGrid(false)
+		t:SetTexelSnappingBias(0)
 		t:Hide()
 		allTex[#allTex + 1] = t
 		return t

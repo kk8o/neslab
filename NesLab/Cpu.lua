@@ -566,7 +566,7 @@ function NesLab.NewCpu(rd, wr, io, RAM, PRG)
 	compiled[key] = src
 	local chunk, err = loadstring(src, "=NesCpu")
 	if not chunk then error(err) end
-	local lim = io and io.bankLow and 0x6000 or 0x8000   -- 写到这以上可能换页（mapper 140 的寄存器在 $6000）
+	local lim = io and io.bankFrom or 0x8000        -- 写到这以上可能换页（机器按 mapper 给：扩展寄存器 $4020、mapper 140 $6000）
 	local function Compile(pc, wi, q, env)
 		local s = BlockSource(PRG, pc, wi, q, lim)
 		if not s then return nil end

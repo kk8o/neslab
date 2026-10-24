@@ -1,6 +1,6 @@
 -- 一台 NES：地址分配（2 KB RAM 镜像、PPU 寄存器、OAM DMA、APU、手柄、卡带）和逐扫描线的帧时序。
 -- 卡带：程序 4 个 8 KB 窗口（$8000 / $A000 / $C000 / $E000），图案 8 个 1 KB 窗口（ppu.chr1k），8 KB 存档内存
--- （$6000-$7FFF，带电池的游戏由 Player 存进 NesLabDB）。mapper：0 NROM、1 MMC1、2 UxROM、3 CNROM、4 MMC3、
+-- （$6000-$7FFF，带电池的游戏由 Player 存进 NesLabDB）。mapper：0 NROM、1 MMC1、2 UxROM、3 CNROM、4 MMC3（含 $5000 选上下半的 1 MB 国产卡）、
 -- 7 AxROM、34 BNROM、66 GxROM、140 Jaleco；图案可以写死在卡带里（CHR ROM），也可以是游戏运行时写的（CHR RAM，见 Ppu.lua）。MMC3 的扫描线计数：开着显示时每条可见线和预渲染线数一次，数到 0 拉起 IRQ。
 -- 时序：先跑垂直空白（241 线置位、开了 NMI 就进中断）和预渲染线，再跑 0-239 可见线
 -- （每线 341 / 3 个 CPU 周期，精灵 0 碰撞按线置位）；画面由 Screen 按这一帧的 PPU 状态画。窗口在 Player.lua。
@@ -15,7 +15,8 @@ function NesLab.RegisterRom(rom)
 end
 
 -- 换页：返回 (写 $8000-$FFFF 时调的函数, 每条扫描线调的函数, 写 $6000-$7FFF 时调的函数——有它就不当存档内存,
--- 存 / 读内部寄存器的函数——即时存档用；只有 MMC1 / MMC3 有，别的一次写入就定下全部页，窗口状态由机器存)。
+-- 存 / 读内部寄存器的函数——即时存档用；只有 MMC1 / MMC3 有，别的一次写入就定下全部页，窗口状态由机器存,
+-- 写 $4020-$5FFF 时调的函数——超过 512 KB 的国产 MMC3 卡用 $5000 选上下半)。
 -- c 提供 SetPrg8(四个 8 KB 页号)、SetPrg16(两个 16 KB 页号)、SetChr1k(八个 1 KB 页号)、SetChr4k(两个 4 KB 页号)、
 -- banks8 / banks16（程序有几页）、Irq(真假)
 local function NewMapper(rom, ppu, c)
@@ -93,13 +94,21 @@ local function NewMapper(rom, ppu, c)
 	elseif id == 4 then                             -- MMC3
 		local R = { [0] = 0, 2, 4, 5, 6, 7, 0, 1 }
 		local sel, latch, counter, reload, enabled = 0, 0, 0, false, false
+		-- 超过 512 KB 的国产 MMC3 卡（外星 / 晶科泰的 RPG，头里只标 mapper 4）：$5000 第 2 位选程序的上 / 下半 512 KB
+		-- （两半最后两页做成一样，换半时 $C000 以后的代码不断）。outer：没写过 $5000 时为 nil，照普通 MMC3
+		local outer
 		local function Apply()
 			local prgMode, chrInvert = band(sel, 0x40) ~= 0, band(sel, 0x80) ~= 0
-			local r6, r7 = R[6] % banks8, R[7] % banks8
-			if prgMode then
-				c.SetPrg8(banks8 - 2, r7, r6, banks8 - 1)
+			local r6, r7, l2, l1
+			if outer then                              -- 写过 $5000：每半 512 KB 里 64 页，固定页也在这一半
+				r6, r7, l2, l1 = R[6] % 64 + outer, R[7] % 64 + outer, 62 + outer, 63 + outer
 			else
-				c.SetPrg8(r6, r7, banks8 - 2, banks8 - 1)
+				r6, r7, l2, l1 = R[6] % banks8, R[7] % banks8, banks8 - 2, banks8 - 1
+			end
+			if prgMode then
+				c.SetPrg8(l2, r7, r6, l1)
+			else
+				c.SetPrg8(r6, r7, l2, l1)
 			end
 			-- R0 / R1 是 2 KB（低位忽略），R2-R5 是 1 KB；反转时两半对调
 			local a0, a1 = R[0] - R[0] % 2, R[1] - R[1] % 2
@@ -139,13 +148,18 @@ local function NewMapper(rom, ppu, c)
 		local function Save()
 			local r = {}
 			for i = 0, 7 do r[i + 1] = R[i] end
-			return { r = r, sel = sel, latch = latch, counter = counter, reload = reload, enabled = enabled }
+			return { r = r, sel = sel, latch = latch, counter = counter, reload = reload, enabled = enabled, outer = outer }
 		end
 		local function Load(t)
 			for i = 0, 7 do R[i] = t.r[i + 1] end
-			sel, latch, counter, reload, enabled = t.sel, t.latch, t.counter, t.reload, t.enabled
+			sel, latch, counter, reload, enabled, outer = t.sel, t.latch, t.counter, t.reload, t.enabled, t.outer
 		end
-		return Write, Scanline, nil, Save, Load
+		local function ExpWrite(a, v)
+			if a ~= 0x5000 then return end           -- 写 $5FF0 的是别的板子（最终幻想、口袋妖怪的汉化卡），不是这个寄存器
+			outer = band(v, 4) ~= 0 and 64 or 0
+			Apply()
+		end
+		return Write, Scanline, nil, Save, Load, banks8 > 64 and ExpWrite or nil
 	end
 	return nil                                     -- NROM：不换页
 end
@@ -200,8 +214,9 @@ function NesLab.NewMachine(rom)
 		c.SetChr1k(a, a + 1, a + 2, a + 3, b, b + 1, b + 2, b + 3)
 	end
 	function c.Irq(v) m.irq = v end
-	local MapperWrite, Scanline, LowWrite, MapperSave, MapperLoad = NewMapper(rom, ppu, c)
-	io.bankLow = LowWrite ~= nil                     -- 写 $6000-$7FFF 也可能换页（CPU 按段编译时要在这里收段）
+	local MapperWrite, Scanline, LowWrite, MapperSave, MapperLoad, ExpWrite = NewMapper(rom, ppu, c)
+	-- 写到这以上就可能换页（CPU 按段编译时要在这里收段）：$4020 起有扩展寄存器、$6000 起有低位寄存器，否则 $8000
+	io.bankFrom = ExpWrite and 0x4020 or LowWrite and 0x6000 or nil
 
 	local rd
 	rd = function(a)
@@ -257,6 +272,8 @@ function NesLab.NewMachine(rom)
 				WRAM[a - 0x6000] = v
 				m.wramDirty, m.wramUsed = true, true
 			end
+		elseif a >= 0x4020 then
+			if ExpWrite then ExpWrite(a, v) end
 		end
 	end
 	io.noIdle = NesLab.noIdle                       -- 关掉空转跳过（对比用）
