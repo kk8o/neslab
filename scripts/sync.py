@@ -1,5 +1,5 @@
 # 把游戏里正在用的 NesLab 按白名单同步进这个仓库（开发用）。转好的游戏卡带（NesLab_<拼音>）一律不进仓库，
-# 只带自己写的两张自检卡带。用法：python scripts/sync.py "<魔兽目录>\_cn_beta_\Interface\AddOns"
+# 只带自己写的两张自检卡带。用法：python scripts/sync.py "<魔兽目录>\_forever_\Interface\AddOns"
 import os, shutil, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

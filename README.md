@@ -37,7 +37,7 @@
 
 ## 安装
 
-1. 把 `NesLab` 文件夹放进 `World of Warcraft\_cn_beta_\Interface\AddOns\`。
+1. 把 `NesLab` 文件夹放进 `World of Warcraft\_forever_\Interface\AddOns\`。
 2. 想先试试的话，把 `NesLab_demo`（自检卡带）也放进去。`NesLab_mmc1` 是 MMC1 自检，`NesLab_Dev` 是开发用的 CPU 测试和测速，都可以不装。
 3. 进游戏，点小地图上的遥控器按钮，或者输入 `/neslab`。
 
