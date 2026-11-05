@@ -30,24 +30,31 @@ local PENALTY = {
 }
 
 local function NZ(r) return " zv = " .. r .. " nv = " .. r end
-local ADC = "local s = A + v + C V = band(bxor(A, s), bxor(v, s), 128) ~= 0 and 1 or 0 C = s > 255 and 1 or 0 A = s % 256" .. NZ("A")
+-- 魔兽里调 bit 库（C 函数）一次约等于十几次算术：溢出标志用比较算，与查 64K 的表 AND8[v * 256 + a]，
+-- 或、异或由与推出（a | v = a + v - (a & v)，a ^ v = a + v - 2 (a & v)）
+local ADC = "local s = A + v + C if A < 128 then V = v < 128 and s >= 128 and 1 or 0 else V = v >= 128 and s < 384 and 1 or 0 end"
+	.. " C = s > 255 and 1 or 0 A = s % 256" .. NZ("A")
+local AND = "AND8[v * 256 + A]"
+local OR = "A + v - AND8[v * 256 + A]"
+local XOR = "A + v - 2 * AND8[v * 256 + A]"
 
 -- 读类操作（用值 v）
 local READ = {
 	LDA = "A = v" .. NZ("v"), LDX = "X = v" .. NZ("v"), LDY = "Y = v" .. NZ("v"),
 	ADC = ADC, SBC = "v = 255 - v " .. ADC,
-	AND = "A = band(A, v)" .. NZ("A"), ORA = "A = bor(A, v)" .. NZ("A"), EOR = "A = bxor(A, v)" .. NZ("A"),
+	AND = "A = " .. AND .. NZ("A"), ORA = "A = " .. OR .. NZ("A"), EOR = "A = " .. XOR .. NZ("A"),
 	CMP = "local r = A - v C = r >= 0 and 1 or 0 r = r % 256" .. NZ("r"),
 	CPX = "local r = X - v C = r >= 0 and 1 or 0 r = r % 256" .. NZ("r"),
 	CPY = "local r = Y - v C = r >= 0 and 1 or 0 r = r % 256" .. NZ("r"),
-	BIT = "zv = band(A, v) nv = v V = v % 128 >= 64 and 1 or 0",
+	BIT = "zv = " .. AND .. " nv = v V = v % 128 >= 64 and 1 or 0",
 	NOP = "", LAX = "A = v X = v" .. NZ("v"),       -- 非官方
-	ANC = "A = band(A, v)" .. NZ("A") .. " C = A >= 128 and 1 or 0",
-	ALR = "A = band(A, v) C = A % 2 A = (A - C) / 2" .. NZ("A"),
-	ARR = "A = band(A, v) A = (A - A % 2) / 2 + C * 128" .. NZ("A") .. " C = A % 128 >= 64 and 1 or 0 V = bxor(C, A % 64 >= 32 and 1 or 0)",
-	AXS = "local r = band(A, X) - v C = r >= 0 and 1 or 0 X = r % 256" .. NZ("X"),
-	XAA = "A = band(X, v)" .. NZ("A"), LXA = "A = v X = v" .. NZ("v"),
-	LAS = "local r = band(v, S) A = r X = r S = r" .. NZ("r"),
+	ANC = "A = " .. AND .. NZ("A") .. " C = A >= 128 and 1 or 0",
+	ALR = "A = " .. AND .. " C = A % 2 A = (A - C) / 2" .. NZ("A"),
+	ARR = "A = " .. AND .. " A = (A - A % 2) / 2 + C * 128" .. NZ("A")
+		.. " C = A % 128 >= 64 and 1 or 0 V = C ~= (A % 64 >= 32 and 1 or 0) and 1 or 0",
+	AXS = "local r = AND8[X * 256 + A] - v C = r >= 0 and 1 or 0 X = r % 256" .. NZ("X"),
+	XAA = "A = AND8[v * 256 + X]" .. NZ("A"), LXA = "A = v X = v" .. NZ("v"),
+	LAS = "local r = AND8[S * 256 + v] A = r X = r S = r" .. NZ("r"),
 }
 -- 写类、读改写类（用地址 a）
 local WRITE = {
@@ -59,14 +66,24 @@ local WRITE = {
 	ROL = "local o = rd(a) local v = o * 2 + C C = v > 255 and 1 or 0 v = v % 256 wr2(a, o, v)" .. NZ("v"),
 	ROR = "local o = rd(a) local c = o % 2 local v = (o - c) / 2 + C * 128 C = c wr2(a, o, v)" .. NZ("v"),
 	-- 非官方：存 A & X；读改写之后再做一次运算
-	SAX = "wr(a, band(A, X))",
+	SAX = "wr(a, AND8[X * 256 + A])",
 	DCP = "local o = rd(a) local v = (o + 255) % 256 wr2(a, o, v) local r = A - v C = r >= 0 and 1 or 0 r = r % 256" .. NZ("r"),
 	ISB = "local o = rd(a) local v = (o + 1) % 256 wr2(a, o, v) v = 255 - v " .. ADC,
-	SLO = "local o = rd(a) local v = o * 2 C = v > 255 and 1 or 0 v = v % 256 wr2(a, o, v) A = bor(A, v)" .. NZ("A"),
-	RLA = "local o = rd(a) local v = o * 2 + C C = v > 255 and 1 or 0 v = v % 256 wr2(a, o, v) A = band(A, v)" .. NZ("A"),
-	SRE = "local o = rd(a) C = o % 2 local v = (o - C) / 2 wr2(a, o, v) A = bxor(A, v)" .. NZ("A"),
+	SLO = "local o = rd(a) local v = o * 2 C = v > 255 and 1 or 0 v = v % 256 wr2(a, o, v) A = " .. OR .. NZ("A"),
+	RLA = "local o = rd(a) local v = o * 2 + C C = v > 255 and 1 or 0 v = v % 256 wr2(a, o, v) A = " .. AND .. NZ("A"),
+	SRE = "local o = rd(a) C = o % 2 local v = (o - C) / 2 wr2(a, o, v) A = " .. XOR .. NZ("A"),
 	RRA = "local o = rd(a) local c = o % 2 local v = (o - c) / 2 + C * 128 C = c wr2(a, o, v) " .. ADC,
 }
+local AND8                                       -- 用到时才建（约 1.5 MB）
+local function BitTables()
+	if AND8 then return end
+	AND8 = {}
+	local band = bit.band
+	for v = 0, 255 do
+		local o = v * 256
+		for a = 0, 255 do AND8[o + a] = band(a, v) end
+	end
+end
 -- 隐含 / 累加器 / 跳转等单独写
 local IMPLIED = {
 	ASL_A = "A = A * 2 C = A > 255 and 1 or 0 A = A % 256" .. NZ("A"),
@@ -180,15 +197,18 @@ end
 -- 段函数接寄存器和剩下的周期 R，每条指令前看周期用完没有（用完就停在这条指令前），停在哪、花多少周期跟逐条执行完全一样。
 -- 段在这些地方结束：跳走的指令（JMP、JSR、RTS、RTI、BRK、间接 JMP）、写卡带区（可能换页，后面的代码就变了）、
 -- 到 8 KB 窗口末尾、满 BLOCK_MAX 条。条件跳转成立就带着目标地址返回；往回跳的另报一声，由 run 照旧做空转判断。
--- 段函数返回：周期, 新 PC, A, X, Y, S, C, V, I, D, zv, nv, 指令数, 写内存次数, 往回跳（true：要做空转判断，2：已判定空转）
+-- 段函数返回：周期, 新 PC, A, X, Y, S, C, V, zv, nv, 指令数, 写内存次数, 往回跳（true：要做空转判断），
+-- 段里有改 I / D 的指令时再带回 I, D（多返回一个值在魔兽里约 37 ns）
 local BLOCK_MAX = 40
 local OPINFO = {}
 for _, e in ipairs(LIST) do OPINFO[e[1]] = e end
 local LEN = { imm = 2, zp = 2, zpx = 2, zpy = 2, abs = 3, absx = 3, absy = 3, indx = 2, indy = 2, rel = 2 }
 local IMPL_LEN = { JMP = 3, JMPI = 3, JSR = 3 }
 local REGS = "A, X, Y, S, C, V, I, D, zv, nv"
-local function Exit(pc, n, back)
-	return "return cy, " .. pc .. ", " .. REGS .. ", " .. n .. ", w" .. (back and ", true" or "")
+local CUR_ID                                     -- 正在编的这段会不会改 I / D 标志
+local function Exit(pc, n, back)                 -- 魔兽里多返回一个值约 37 ns：I、D 放最后，段里没改过就不返回
+	return "return cy, " .. pc .. ", A, X, Y, S, C, V, zv, nv, " .. n .. ", w"
+		.. (back and ", true" or CUR_ID and ", false" or "") .. (CUR_ID and ", I, D" or "")
 end
 local function Push(v) return "RAM[0x100 + S] = " .. v .. " w = w + 1 S = (S + 255) % 256 " end
 local PULL = "S = (S + 1) % 256 "
@@ -228,7 +248,7 @@ local function Emit(e, addr, b1, b2, n, wi, q, lim)
 		end
 		if name == "JSR" then
 			local r = addr + 2
-			return head .. Push((r - r % 256) / 256) .. Push(r % 256) .. Exit(t, n), true
+			return head .. Push((r - r % 256) / 256) .. Push(r % 256) .. Exit(t, n, false), true
 		end
 		if name == "RTS" then
 			return head .. PULL .. "local lo = RAM[0x100 + S] " .. PULL
@@ -279,19 +299,55 @@ local function Emit(e, addr, b1, b2, n, wi, q, lim)
 			:gsub("wr(%b())", function(args) return "RAM[" .. idx .. "] = " .. args:sub(5, -2) .. " w = w + 1" end)
 		return head .. setup .. body
 	elseif kind == "const" then
-		if ca >= lim then return head .. setup .. body .. " " .. Exit(nxt, n), true end
+		if ca >= lim then return head .. setup .. body .. " " .. Exit(nxt, n, false), true end
 		return head .. setup .. body
 	end
-	return head .. setup .. body .. " if a >= " .. lim .. " then " .. Exit(nxt, n) .. " end"
+	return head .. setup .. body .. " if a >= " .. lim .. " then " .. Exit(nxt, n, false) .. " end"
 end
 
 -- 卡带程序 pc 起的一段（pc 在第 wi 个窗口，窗口起点偏移 q：PRG[q + 地址]）→ 源码；第一条就放不下返回 nil
--- 段里有往回跳到段开头的条件跳转或 JMP（第 loopAt 条）时，开头到这条包进 while 在段内转圈：每圈照旧做空转判断（IdleB）、
+-- 段里有往回跳到段开头的条件跳转或 JMP（第 loopAt 条）时，开头到这条包进 while 在段内转圈：每圈做空转判断（IdleSkip）、
 -- 转回开头前看周期，跟逐条执行一样。指令数写成 n0 + 第几条（n0 = 之前几圈跑过的条数）
+-- 段内转圈的空转判断：一圈下来没写内存、没碰有副作用的端口（io.n 没变）、寄存器标志跟这圈开头全同，
+-- 这次 run 里就只会原样一圈圈转下去：整圈跳过，只留最后不满一圈照常跑（停在哪条、花多少周期跟不跳一样）。
+-- 圈里有写内存的指令就一定不是空转，不判；圈里有读端口（rd）才看 io.n
+local function IdleSkip(n, io)
+	return "if X == sX and Y == sY and A == sA and zv == sZ and nv == sN and C == sC and V == sV and S == sS"
+		.. (io and " and IO.n == sio" or "") .. " and not IO.noIdle then local lap = cy - cs local r = R - cy"
+		.. " if r >= lap then local k = (r - r % lap) / lap cy = cy + k * lap n0 = n0 + k * " .. n .. " end end "
+end
+local function IsWrite(e)
+	return e and (WRITE[e[2]] or e[2] == "PHA" or e[2] == "PHP")
+end
+local ID_OPS = { SEI = true, CLI = true, SED = true, CLD = true, PLP = true, RTI = true, BRK = true }
+local STOP_OPS = { JMP = true, JMPI = true, JSR = true, RTS = true, BRK = true }
+local function ScanID(PRG, pc, wi, q)            -- 这段里有没有改 I / D 的指令（宁可多报）
+	local addr, n, wend = pc, 0, 0xA000 + wi * 0x2000
+	while n < BLOCK_MAX do
+		local e = OPINFO[PRG[q + addr]]
+		local len = e and (LEN[e[3]] or IMPL_LEN[e[2]]) or 1
+		if addr + len > wend then break end
+		n = n + 1
+		if e and ID_OPS[e[2]] then return true end
+		if e and STOP_OPS[e[2]] then return false end
+		addr = addr + len
+	end
+	return false
+end
 local function BlockSource(PRG, pc, wi, q, lim, loopAt)
-	local out = { "local PRG, RAM, rd, wr, wr2, W, band, bor, bxor, IdleB = ...\n"
+	if not loopAt then CUR_ID = ScanID(PRG, pc, wi, q) end
+	local out = { "local PRG, RAM, rd, wr, wr2, W, IO, AND8 = ...\n"
 		.. "return function(A, X, Y, S, C, V, I, D, zv, nv, R)\nlocal cy, w, n0 = 0, 0, 0\n" }
-	if loopAt then out[#out + 1] = "while true do\n" end
+	local top, wrote, io
+	if loopAt then
+		out[#out + 1] = "while true do\n"
+		top = #out
+	end
+	local function Top()                     -- 圈开头：要判空转就记下寄存器
+		if wrote then return end
+		out[top] = "local cs, sA, sX, sY, sS, sC, sV, sZ, sN, sio\nwhile true do\ncs, sA, sX, sY, sS, sC, sV, sZ, sN"
+			.. (io and ", sio" or "") .. " = cy, A, X, Y, S, C, V, zv, nv" .. (io and ", IO.n" or "") .. "\n"
+	end
 	local addr, n, wend = pc, 0, 0xA000 + wi * 0x2000
 	while n < BLOCK_MAX do
 		local e = OPINFO[PRG[q + addr]]
@@ -300,28 +356,33 @@ local function BlockSource(PRG, pc, wi, q, lim, loopAt)
 		if n > 0 then out[#out + 1] = "if cy >= R then " .. Exit(addr, "n0 + " .. n) .. " end\n" end
 		n = n + 1
 		local b1 = PRG[q + addr + 1]
-		if n == loopAt and e[2] == "JMP" then   -- JMP 回段开头：段内一直转，直到空转或周期用完
-			out[#out + 1] = "cy = cy + 3 if IdleB(" .. pc .. ", w, A, X, Y, S, C, V, zv, nv) then return cy, " .. pc .. ", "
-				.. REGS .. ", n0 + " .. n .. ", w, 2 end n0 = n0 + " .. n .. " if cy >= R then " .. Exit(pc, "n0") .. " end\nend\n"
+		if n == loopAt and e[2] == "JMP" then   -- JMP 回段开头：段内一直转，直到周期用完
+			Top()
+			out[#out + 1] = "cy = cy + 3 " .. (wrote and "" or IdleSkip(n, io)) .. "n0 = n0 + " .. n
+				.. " if cy >= R then " .. Exit(pc, "n0") .. " end\nend\n"
 			return table.concat(out) .. "end"
 		elseif n == loopAt then                  -- 转回段开头：不成立就出循环往下走
+			Top()
 			local extra = pc - pc % 256 ~= (addr + 2) - (addr + 2) % 256 and 2 or 1
-			out[#out + 1] = "cy = cy + 2 if not (" .. BRANCH[e[2]] .. ") then break end cy = cy + " .. extra
-				.. " if IdleB(" .. pc .. ", w, A, X, Y, S, C, V, zv, nv) then return cy, " .. pc .. ", " .. REGS
-				.. ", n0 + " .. n .. ", w, 2 end n0 = n0 + " .. n .. " if cy >= R then " .. Exit(pc, "n0") .. " end\nend\n"
+			out[#out + 1] = "cy = cy + 2 if not (" .. BRANCH[e[2]] .. ") then break end cy = cy + " .. extra .. " "
+				.. (wrote and "" or IdleSkip(n, io)) .. "n0 = n0 + " .. n .. " if cy >= R then " .. Exit(pc, "n0") .. " end\nend\n"
 		else
 			if not loopAt and e and (e[3] == "rel" and (addr + 2 + (b1 < 128 and b1 or b1 - 256)) % 65536 == pc
 				or e[2] == "JMP" and b1 + PRG[q + addr + 2] * 256 == pc) then
 				return BlockSource(PRG, pc, wi, q, lim, n)   -- 有转回开头的跳转：重编成带循环的
 			end
 			local code, stop = Emit(e, addr, b1, PRG[q + addr + 2], "n0 + " .. n, wi, q, lim)
+			if loopAt and n < loopAt then
+				if IsWrite(e) then wrote = true end
+				if code:find("rd(", 1, true) then io = true end
+			end
 			out[#out + 1] = "do " .. code .. " end\n"
 			if stop then return table.concat(out) .. "end" end
 		end
 		addr = addr + len
 	end
 	if n == 0 then return nil end
-	return table.concat(out) .. Exit(addr, "n0 + " .. n) .. "\nend"
+	return table.concat(out) .. Exit(addr, "n0 + " .. n, false) .. "\nend"
 end
 
 local function Body(e, fast)
@@ -359,14 +420,14 @@ end
 local PLAIN_RUN, BLOCK_RUN, TAIL                 -- cpu.run 的两种写法和共用的尾巴（源码在后面）
 local function Source(fast, prg, blocks)
 	local src = { [[
-local rd, wr, io, RAM, PRG, Compile = ...
+local rd, wr, io, RAM, PRG, Compile, AND8 = ...
 local Q0, Q1, Q2, Q3 = 0, 0, 0, 0               -- 程序窗口（快路直读卡带程序用，cpu.setPrg 设）
 local W = { [0] = 0, 0, 0, 0 }                  -- 同上，给编好的段用
 local WN = 0                                     -- 快路直写内存的次数（空转判断用）
 local function zw(a, v) RAM[a] = v WN = WN + 1 end
-local band, bor, bxor = bit.band, bit.bor, bit.bxor
 local A, X, Y, S, PC, C, V, I, D, zv, nv = 0, 0, 0, 0xFD, 0, 0, 0, 1, 0, 1, 0
 local BIG = 1048576                             -- 空转报信：跳转指令返回的周期数加上它
+local IO = io or { n = 0, noIdle = true }        -- 自检时没有 io：不跳空转
 local LT, LIO, LA, LX, LY, LS, LC, LV, LZ, LN, HIT = -1
 -- 往回跳到 t：是不是原样空转（同一目标、没写内存、寄存器标志全同）。寄存器由调用方给（编好的段在段内转圈时
 -- 寄存器在段里），w = 段里还没记进 WN 的写内存次数
@@ -463,7 +524,11 @@ end
 -- 段按「PRG 里的位置 × 4 + 窗口号」存（同一段程序映射到不同窗口时地址不同，要分开编）；路过第四次才编，每帧最多编几段（cpu.allow）
 BLOCK_RUN = [[
 local BLK, HOT = {}, {}
-local ENV = { PRG, RAM, rd, wr, wr2, W, band, bor, bxor, IdleB }
+local ENV = { PRG, RAM, rd, wr, wr2, W, IO, AND8 }
+-- 冷代码逐条执行时，顺着往下走到的地址不算「路过」（不然一串冷指令条条都会编成一段）；跳转类指令之后才算
+local CF = { [0x10] = 1, [0x30] = 1, [0x50] = 1, [0x70] = 1, [0x90] = 1, [0xB0] = 1, [0xD0] = 1, [0xF0] = 1,
+	[0x4C] = 1, [0x6C] = 1, [0x20] = 1, [0x60] = 1, [0x40] = 1, [0x00] = 1 }
+local SEQ = -1
 cpu.blocks = 0
 local HOT_AT = NesLab.blockHot or 4               -- 路过几次才编（自检设 1：每条都走编好的段）
 local ALLOW = math.huge                         -- 还能编几段：机器每帧用 cpu.allow 重设（编一段约 0.3 ms，进新场景时别卡）
@@ -498,7 +563,7 @@ end
 ]]
 -- 跑一段（或一条）：c = 周期（空转报信时加 BIG），k = 指令数。展开在 run 的两个循环里（省一层函数调用）
 BLOCK_RUN = BLOCK_RUN:gsub("STEP", function() return [[
-local c, k
+local c, k, cold
 			if PC >= 0x8000 and PC < 0x10000 then
 				local wi, q
 				if PC >= 0xC000 then
@@ -507,29 +572,37 @@ local c, k
 				local key = (q + PC) * 4 + wi
 				local blk = BLK[key]
 				if blk == nil then
-					local h = (HOT[key] or 0) + 1
-					HOT[key] = h
-					if h >= HOT_AT and ALLOW > 0 then
-						ALLOW = ALLOW - 1
-						blk = Compile(PC, wi, q, ENV) or false
-						BLK[key], HOT[key] = blk, nil
-						if blk then cpu.blocks = cpu.blocks + 1 end
+					cold = true
+					if PC ~= SEQ then
+						local h = (HOT[key] or 0) + 1
+						HOT[key] = h
+						if h >= HOT_AT and ALLOW > 0 then
+							ALLOW = ALLOW - 1
+							blk = Compile(PC, wi, q, ENV) or false
+							BLK[key], HOT[key] = blk, nil
+							if blk then cpu.blocks = cpu.blocks + 1 end
+						end
 					end
 				end
 				if blk then
-					local t, w, back
-					c, t, A, X, Y, S, C, V, I, D, zv, nv, k, w, back = blk(A, X, Y, S, C, V, I, D, zv, nv, budget - done)
+					local t, w, back, i2, d2           -- 段里改过 I、D 才带回 i2、d2
+					c, t, A, X, Y, S, C, V, zv, nv, k, w, back, i2, d2 = blk(A, X, Y, S, C, V, I, D, zv, nv, budget - done)
+					if i2 then I, D = i2, d2 end
 					WN = WN + w
 					PC = t
-					if back == 2 or back and Idle(t) then c = c + BIG end   -- 2：段内转圈时已经判过是空转
+					if back then                     -- 往回跳出段：先就地筛掉「跟上次不同」的（多数），剩下的才细判
+						local m = IO.n + WN
+						if t ~= LT or m ~= LIO then LT, LIO, LA = t, m, nil
+						elseif Idle(t) then c = c + BIG end
+					end
 				end
 			end
 			if not c then
 				local op = rd(PC)
 				PC = PC + 1
 				c, k = OPS[op](), 1
+				SEQ = cold and not CF[op] and PC or -1
 			end]] end)
-
 TAIL = [[
 function cpu.reset() PC = rd(0xFFFC) + rd(0xFFFD) * 256 S = 0xFD I = 1 end
 function cpu.nmi()
@@ -558,6 +631,7 @@ NesLab.opcodeCount = #LIST
 local compiled = {}                              -- 源码只拼一次（普通 / 快路 / 直读卡带 / 按段各一份）
 -- NesLab.noBlocks：不按段编译（对比用）
 function NesLab.NewCpu(rd, wr, io, RAM, PRG)
+	BitTables()
 	local fast = RAM ~= nil
 	local prg = fast and PRG ~= nil
 	local blocks = prg and not NesLab.noBlocks
@@ -574,5 +648,5 @@ function NesLab.NewCpu(rd, wr, io, RAM, PRG)
 		if not f then error(e) end
 		return f(unpack(env))
 	end
-	return chunk(rd, wr, io, RAM, PRG, Compile)
+	return chunk(rd, wr, io, RAM, PRG, Compile, AND8)
 end

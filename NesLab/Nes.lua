@@ -97,33 +97,44 @@ local function NewMapper(rom, ppu, c)
 		-- 超过 512 KB 的国产 MMC3 卡（外星 / 晶科泰的 RPG，头里只标 mapper 4）：$5000 第 2 位选程序的上 / 下半 512 KB
 		-- （两半最后两页做成一样，换半时 $C000 以后的代码不断）。outer：没写过 $5000 时为 nil，照普通 MMC3
 		local outer
-		local function Apply()
-			local prgMode, chrInvert = band(sel, 0x40) ~= 0, band(sel, 0x80) ~= 0
+		-- 程序页、图案页分开算：写寄存器时只重算受影响的那一半（魔兽里一次全算约 10 µs）
+		local function ApplyPrg()
 			local r6, r7, l2, l1
 			if outer then                              -- 写过 $5000：每半 512 KB 里 64 页，固定页也在这一半
 				r6, r7, l2, l1 = R[6] % 64 + outer, R[7] % 64 + outer, 62 + outer, 63 + outer
 			else
 				r6, r7, l2, l1 = R[6] % banks8, R[7] % banks8, banks8 - 2, banks8 - 1
 			end
-			if prgMode then
+			if sel % 128 >= 64 then
 				c.SetPrg8(l2, r7, r6, l1)
 			else
 				c.SetPrg8(r6, r7, l2, l1)
 			end
+		end
+		local function ApplyChr()
 			-- R0 / R1 是 2 KB（低位忽略），R2-R5 是 1 KB；反转时两半对调
 			local a0, a1 = R[0] - R[0] % 2, R[1] - R[1] % 2
-			if chrInvert then
+			if sel >= 128 then
 				c.SetChr1k(R[2], R[3], R[4], R[5], a0, a0 + 1, a1, a1 + 1)
 			else
 				c.SetChr1k(a0, a0 + 1, a1, a1 + 1, R[2], R[3], R[4], R[5])
 			end
 		end
+		local function Apply() ApplyPrg() ApplyChr() end
 		Apply()
 		local function Write(a, v)
 			local even = a % 2 == 0
 			if a < 0xA000 then
-				if even then sel = v else R[sel % 8] = v end
-				Apply()
+				if even then
+					local old = sel
+					sel = v
+					if (old % 128 >= 64) ~= (v % 128 >= 64) then ApplyPrg() end
+					if (old >= 128) ~= (v >= 128) then ApplyChr() end
+				else
+					local r = sel % 8
+					R[r] = v
+					if r >= 6 then ApplyPrg() else ApplyChr() end
+				end
 			elseif a < 0xC000 then
 				if even then ppu.SetMirror(v % 2 == 0 and "V" or "H") end
 			elseif a < 0xE000 then
@@ -198,16 +209,14 @@ function NesLab.NewMachine(rom)
 	function c.SetPrg16(a, b)
 		c.SetPrg8((a % banks16) * 2, (a % banks16) * 2 + 1, (b % banks16) * 2, (b % banks16) * 2 + 1)
 	end
-	function c.SetChr1k(...)
-		local changed = false
-		for i = 0, 7 do
-			local v = select(i + 1, ...) % chrBanks1k
-			if chr1k[i] ~= v then
-				chr1k[i] = v
-				changed = true
-			end
+	function c.SetChr1k(b0, b1, b2, b3, b4, b5, b6, b7)   -- 不用 select（魔兽里是 C 调用）
+		local n = chrBanks1k
+		b0, b1, b2, b3, b4, b5, b6, b7 = b0 % n, b1 % n, b2 % n, b3 % n, b4 % n, b5 % n, b6 % n, b7 % n
+		if chr1k[0] ~= b0 or chr1k[1] ~= b1 or chr1k[2] ~= b2 or chr1k[3] ~= b3
+			or chr1k[4] ~= b4 or chr1k[5] ~= b5 or chr1k[6] ~= b6 or chr1k[7] ~= b7 then
+			chr1k[0], chr1k[1], chr1k[2], chr1k[3], chr1k[4], chr1k[5], chr1k[6], chr1k[7] = b0, b1, b2, b3, b4, b5, b6, b7
+			ppu.Split("c")                             -- 画面中途换页：从下一线开新横带
 		end
-		if changed then ppu.Split("c") end             -- 画面中途换页：从下一线开新横带
 	end
 	function c.SetChr4k(a, b)
 		a, b = a * 4, b * 4
@@ -257,7 +266,12 @@ function NesLab.NewMachine(rom)
 		elseif a < 0x4000 then
 			PWrite(a % 8, v)
 		elseif a == 0x4014 then
-			for i = 0, 255 do Dma(rd(v * 256 + i)) end
+			if v < 0x20 then                            -- 从内存搬（几乎都是）：整页直接抄进 OAM
+				local OAM, o, base = ppu.OAM, ppu.oamAddr, (v % 8) * 256
+				for i = 0, 255 do OAM[(o + i) % 256] = RAM[base + i] end
+			else
+				for i = 0, 255 do Dma(rd(v * 256 + i)) end
+			end
 			stall = stall + 513
 		elseif a == 0x4016 then
 			pad.strobe = v % 2
@@ -353,7 +367,7 @@ function NesLab.NewMachine(rom)
 		return true
 	end
 	local function Line(counted)
-		if counted and Scanline and band(ppu.mask, 0x18) ~= 0 then
+		if counted and Scanline and ppu.mask % 32 >= 8 then
 			-- MMC3 在这一行第 260 个点（精灵取图、PPU 地址第 12 位升起）才数线：先跑到那里再数，
 			-- 上一次打断的处理程序才来得及改好计数（有的游戏在打断里改下一次的行数）
 			debt = debt + A12_AT
@@ -397,7 +411,7 @@ function NesLab.NewMachine(rom)
 		local s0 = ppu.s0
 		for l = 0, 239 do
 			ppu.line = l
-			if l == s0 then ppu.status = bor(ppu.status, 0x40) end
+			if l == s0 and ppu.status % 128 < 64 then ppu.status = ppu.status + 64 end
 			Line(true)
 		end
 		ppu.line = 240
